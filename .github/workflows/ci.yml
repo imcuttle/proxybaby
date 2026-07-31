@@ -19,7 +19,10 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-      - run: npm ci --omit=optional
+      # Note: 用 `npm install` 而不是 `npm ci`，因为 esbuild 0.28 有大量 optional 平台包
+      # (@esbuild/netbsd-arm64 等) 是 host-cpu-only 装入 lock 的，`npm ci` 会误报
+      # "Missing X from lock file"。`--no-audit --no-fund` 让输出干净点。
+      - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run test:integration

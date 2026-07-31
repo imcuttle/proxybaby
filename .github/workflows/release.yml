@@ -50,7 +50,8 @@ jobs:
           echo "Releasing $VER"
 
       - name: Install
-        run: npm ci --omit=optional
+        # See ci.yml for why `npm install` instead of `npm ci`.
+        run: npm install --no-audit --no-fund
 
       - name: Typecheck + unit tests
         run: |

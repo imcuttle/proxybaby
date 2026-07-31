@@ -12,6 +12,7 @@ import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
 import { FilterConfigView } from './components/filter-config/FilterConfigView';
 import { FilterEntryEditorView } from './components/filter-config/FilterEntryEditorView';
+import { RuleQuickInputView } from './windows/RuleQuickInputView';
 import { ComposerView } from './components/ComposerView';
 import { DiffModal } from './components/DiffModal';
 import { BreakpointModal } from './components/BreakpointModal';
@@ -23,8 +24,8 @@ import { Sparkles, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { Flow } from '../shared/types';
 
 /** 根据 hash 判断当前渲染的是主窗口还是子窗口。 */
-type RouteName = 'main' | 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor';
-const CHILD_ROUTES: readonly RouteName[] = ['settings', 'diff', 'filter-config', 'filter-entry-editor'] as const;
+type RouteName = 'main' | 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input';
+const CHILD_ROUTES: readonly RouteName[] = ['settings', 'diff', 'filter-config', 'filter-entry-editor', 'rule-quick-input'] as const;
 
 function useRoute(): RouteName {
   const parse = (): RouteName => {
@@ -46,6 +47,7 @@ export function App() {
   if (route === 'diff') return <DiffWindow />;
   if (route === 'filter-config') return <FilterConfigWindow />;
   if (route === 'filter-entry-editor') return <FilterEntryEditorWindow />;
+  if (route === 'rule-quick-input') return <RuleQuickInputWindow />;
   return <MainWindow />;
 }
 
@@ -101,6 +103,18 @@ function FilterEntryEditorWindow() {
       <ChildWindowHeader title="新增过滤规则" />
       <div className="flex-1 min-h-0">
         <FilterEntryEditorView />
+      </div>
+    </div>
+  );
+}
+
+/** 快速规则输入子窗口。 */
+function RuleQuickInputWindow() {
+  return (
+    <div className="h-full w-full flex flex-col bg-pb-bg text-pb-text" data-testid="rule-quick-input-window">
+      <ChildWindowHeader title="快速规则" />
+      <div className="flex-1 min-h-0">
+        <RuleQuickInputView />
       </div>
     </div>
   );

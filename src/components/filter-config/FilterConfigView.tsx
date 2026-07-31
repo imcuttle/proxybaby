@@ -61,7 +61,6 @@ function TabButton({
 // ============ SSL Tab ============
 function SslTab() {
   const [cfg, setCfg] = useState<SslDecryptConfig>({ enabled: true, mode: 'all', entries: [] });
-  const [sub, setSub] = useState<'include' | 'exclude'>('include');
 
   const refresh = async () => setCfg(await window.proxybaby.sslListGet());
   useEffect(() => { refresh(); }, []);
@@ -77,15 +76,6 @@ function SslTab() {
   const setEnabled = (enabled: boolean) => save({ ...cfg, enabled });
   const setMode = (mode: SslDecryptConfig['mode']) => save({ ...cfg, mode });
   const setEntries = (entries: FilterEntry[]) => save({ ...cfg, entries });
-
-  // Include / Exclude 二级 Tab 只是按 note 前缀过滤展示？—— 简化：所有 entries 共用，用 mode 决定语义。
-  // 但为对齐 Proxyman "包含列表 / 排除列表"，我们把 mode 与 sub 联动：
-  //   sub='include' 时展示 mode='include' 视图；sub='exclude' 时展示 mode='exclude' 视图。
-  useEffect(() => {
-    if (sub === 'include' && cfg.mode === 'exclude') setMode('include');
-    if (sub === 'exclude' && cfg.mode === 'include') setMode('exclude');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sub]);
 
   return (
     <div className="p-4 space-y-3" data-testid="ssl-panel">
@@ -104,30 +94,27 @@ function SslTab() {
         </span>
       </div>
 
-      <div className="flex text-xs border-b border-pb-border">
-        <SubTab active={sub === 'include'} onClick={() => setSub('include')} testId="ssl-sub-include">
-          包含列表
-        </SubTab>
-        <SubTab active={sub === 'exclude'} onClick={() => setSub('exclude')} testId="ssl-sub-exclude">
-          排除列表
-        </SubTab>
-        {cfg.mode === 'all' && (
-          <button
-            className="pb-btn ml-auto px-2 py-0.5 text-xs"
-            data-testid="ssl-mode-switch"
-            onClick={() => setMode('include')}
-          >
-            退出"全部解密"模式
-          </button>
-        )}
+      <div className="flex text-xs items-center gap-3" data-testid="ssl-mode">
+        {(['all', 'include', 'exclude'] as const).map((m) => (
+          <label key={m} className="inline-flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              name="ssl-mode"
+              data-testid={`ssl-mode-${m}`}
+              checked={cfg.mode === m}
+              onChange={() => setMode(m)}
+            />
+            {m === 'all' ? '全部解密' : m === 'include' ? '仅包含列表' : '排除列表外全部解密'}
+          </label>
+        ))}
       </div>
 
       <div className="text-xs text-pb-muted">
         {cfg.mode === 'all'
-          ? '当前是"全部解密"模式：所有 HTTPS 都尝试 MITM，列表暂不生效。'
-          : sub === 'include'
-            ? '拦截并解密以下列表中的 HTTPS。'
-            : '不解密以下列表中的 HTTPS（其余全部解密）。'}
+          ? '当前是"全部解密"模式：所有 HTTPS 都尝试 MITM，下方列表暂不生效。'
+          : cfg.mode === 'include'
+            ? '仅拦截并解密下方列表中的 HTTPS，其余全部直通不解密。'
+            : '不解密下方列表中的 HTTPS，其余全部解密。'}
       </div>
 
       <EntryTable
@@ -139,31 +126,6 @@ function SslTab() {
         testIdPrefix="ssl"
       />
     </div>
-  );
-}
-
-function SubTab({
-  active,
-  onClick,
-  children,
-  testId,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-  testId?: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      data-testid={testId}
-      className={cn(
-        'px-3 py-1 -mb-px border-b-2',
-        active ? 'border-pb-accent text-pb-text' : 'border-transparent text-pb-muted hover:text-pb-text',
-      )}
-    >
-      {children}
-    </button>
   );
 }
 

@@ -4,7 +4,7 @@ import * as ContextMenu from '@radix-ui/react-context-menu';
 import { ChevronDown, ChevronRight, Globe, Package, Pin, Bookmark, PanelLeftClose } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { cn } from '../lib/cn';
-import type { FilterKind, FilterEntry } from '../../shared/types';
+import type { FilterKind, FilterEntry, RuleQuickInputParams } from '../../shared/types';
 
 export function Sidebar() {
   const flows = useFlowStore((s) => s.flows);
@@ -120,6 +120,49 @@ export function Sidebar() {
         window.proxybaby.mitmDisableHost(h, true);
       }
     }
+  };
+
+  /**
+   * 快速规则：无参数的立即写入（abort / CORS）；有参数的打开子窗口。
+   * pattern 生成规则：host 右键 → `<host>`；subpath 右键 → `<host><path>*`。
+   */
+  const quickRulePresets: QuickRulePreset[] = [
+    { key: 'abort',     label: '禁止访问',       kind: 'immediate', operator: 'abort',  value: '' },
+    { key: 'cors',      label: '一键 CORS',      kind: 'immediate', operator: 'raw',    value: 'resHeaders://{"Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"*","Access-Control-Allow-Headers":"*","Access-Control-Expose-Headers":"*"}' },
+    { key: 'mapLocal',  label: '本地映射…',      kind: 'input', operator: 'mapLocal',  inputKind: 'file',     placeholder: '本地文件绝对路径' },
+    { key: 'mapRemote', label: '远程映射…',      kind: 'input', operator: 'mapRemote', inputKind: 'text',     placeholder: 'http://target.example.com' },
+    { key: 'mock',      label: '返回 Mock JSON…', kind: 'input', operator: 'mock',      inputKind: 'textarea', placeholder: '{"key":"value"}' },
+    { key: 'statusCode',label: '状态码替换…',    kind: 'input', operator: 'statusCode',inputKind: 'number',   placeholder: '如 404' },
+    { key: 'resDelay',  label: '响应延迟…',      kind: 'input', operator: 'resDelay',  inputKind: 'number',   placeholder: '毫秒' },
+    { key: 'resBody',   label: '重写响应体…',    kind: 'input', operator: 'resBody',   inputKind: 'textarea', placeholder: '响应体文本' },
+  ];
+
+  const applyQuickRule = async (pattern: string, preset: QuickRulePreset) => {
+    if (preset.kind === 'immediate') {
+      try {
+        await window.proxybaby.rulesQuickAdd({ pattern, operator: preset.operator, value: preset.value });
+      } catch {}
+      return;
+    }
+    // 参数化：打开子窗口
+    const params: RuleQuickInputParams = {
+      operator: preset.operator,
+      pattern,
+      label: preset.label.replace(/…$/, ''),
+      inputKind: preset.inputKind,
+      placeholder: preset.placeholder,
+    };
+    try {
+      await window.proxybaby.ruleQuickInputOpen(params);
+    } catch {}
+  };
+
+  const openCustomRule = async (pattern: string) => {
+    try {
+      await window.proxybaby.rulesQuickAddCustom({ pattern });
+      // 切到规则页
+      window.proxybaby.broadcast('nav:goto', { page: 'rules' });
+    } catch {}
   };
 
   const revealInFinder = (bundlePath?: string) => {
@@ -251,6 +294,9 @@ export function Sidebar() {
               onAddUrlToList={(prefix, mode) => addToSslList('url', prefix, mode)}
               onDeleteHost={() => deleteHostFlows(host)}
               onDeleteSubpath={(prefix) => deleteHostFlows(host, prefix)}
+              quickRulePresets={quickRulePresets}
+              onApplyQuickRule={applyQuickRule}
+              onOpenCustomRule={openCustomRule}
             />
           ))}
           {q && filteredHosts.length === 0 && (
@@ -371,6 +417,9 @@ function HostItem({
   onAddUrlToList,
   onDeleteHost,
   onDeleteSubpath,
+  quickRulePresets,
+  onApplyQuickRule,
+  onOpenCustomRule,
 }: {
   host: string;
   count: number;
@@ -384,6 +433,9 @@ function HostItem({
   onAddUrlToList: (prefix: string, mode: 'include' | 'exclude') => void;
   onDeleteHost: () => void;
   onDeleteSubpath: (prefix: string) => void;
+  quickRulePresets: QuickRulePreset[];
+  onApplyQuickRule: (pattern: string, preset: QuickRulePreset) => void;
+  onOpenCustomRule: (pattern: string) => void;
 }) {
   // 若 host 未命中但仅子路径命中 → 默认展开以便看到匹配项
   const hostMatched = !query || host.toLowerCase().includes(query);
@@ -400,6 +452,9 @@ function HostItem({
         onToggleSsl={onToggleSsl}
         onAddToList={onAddToList}
         onDelete={onDeleteHost}
+        quickRulePresets={quickRulePresets}
+        onApplyQuickRule={onApplyQuickRule}
+        onOpenCustomRule={onOpenCustomRule}
       >
         <div
           data-testid="host-row"
@@ -434,6 +489,9 @@ function HostItem({
             prefix={prefix}
             onAddToList={(mode) => onAddUrlToList(prefix, mode)}
             onDelete={() => onDeleteSubpath(prefix)}
+            quickRulePresets={quickRulePresets}
+            onApplyQuickRule={onApplyQuickRule}
+            onOpenCustomRule={onOpenCustomRule}
           >
             <button
               data-testid="subpath-item"
@@ -462,6 +520,9 @@ function HostContextMenu({
   onToggleSsl,
   onAddToList,
   onDelete,
+  quickRulePresets,
+  onApplyQuickRule,
+  onOpenCustomRule,
   children,
 }: {
   host: string;
@@ -469,6 +530,9 @@ function HostContextMenu({
   onToggleSsl: () => void;
   onAddToList: (mode: 'include' | 'exclude') => void;
   onDelete: () => void;
+  quickRulePresets: QuickRulePreset[];
+  onApplyQuickRule: (pattern: string, preset: QuickRulePreset) => void;
+  onOpenCustomRule: (pattern: string) => void;
   children: React.ReactNode;
 }) {
   const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
@@ -486,11 +550,18 @@ function HostContextMenu({
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={() => onAddToList('include')} className={itemCls}>
-            <span className="flex-1">仅抓取此域名（加入 SSL 包含列表）</span>
+            <span className="flex-1">仅抓取此域名</span>
           </ContextMenu.Item>
           <ContextMenu.Item onSelect={() => onAddToList('exclude')} className={itemCls}>
-            <span className="flex-1">抓包时排除此域名（加入 SSL 排除列表）</span>
+            <span className="flex-1">抓包时排除此域名</span>
           </ContextMenu.Item>
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <QuickRuleSubMenu
+            pattern={host}
+            presets={quickRulePresets}
+            onApply={onApplyQuickRule}
+            onOpenCustom={onOpenCustomRule}
+          />
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>
             <span className="flex-1">删除该域下所有请求</span>
@@ -506,15 +577,23 @@ function SubpathContextMenu({
   prefix,
   onAddToList,
   onDelete,
+  quickRulePresets,
+  onApplyQuickRule,
+  onOpenCustomRule,
   children,
 }: {
   prefix: string;
   onAddToList: (mode: 'include' | 'exclude') => void;
   onDelete: () => void;
+  quickRulePresets: QuickRulePreset[];
+  onApplyQuickRule: (pattern: string, preset: QuickRulePreset) => void;
+  onOpenCustomRule: (pattern: string) => void;
   children: React.ReactNode;
 }) {
   const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
   const destructiveCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-error hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
+  // subpath 的 pattern：加 `*` 后缀作为 URL glob
+  const pattern = prefix.endsWith('*') ? prefix : `${prefix}*`;
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
@@ -531,12 +610,73 @@ function SubpathContextMenu({
             <span className="flex-1">抓包时排除此路径（加入 SSL 排除列表）</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <QuickRuleSubMenu
+            pattern={pattern}
+            presets={quickRulePresets}
+            onApply={onApplyQuickRule}
+            onOpenCustom={onOpenCustomRule}
+          />
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>
             <span className="flex-1">删除该前缀下所有请求</span>
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  );
+}
+
+/** 快速规则子菜单（host / subpath 共用）*/
+type QuickRulePreset = {
+  key: string;
+  label: string;
+} & (
+  | { kind: 'immediate'; operator: string; value: string }
+  | { kind: 'input'; operator: 'mapLocal' | 'mapRemote' | 'mock' | 'statusCode' | 'resDelay' | 'resBody'; inputKind: 'text' | 'textarea' | 'number' | 'file'; placeholder?: string }
+);
+
+function QuickRuleSubMenu({
+  pattern,
+  presets,
+  onApply,
+  onOpenCustom,
+}: {
+  pattern: string;
+  presets: QuickRulePreset[];
+  onApply: (pattern: string, preset: QuickRulePreset) => void;
+  onOpenCustom: (pattern: string) => void;
+}) {
+  const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
+  const trigCls = 'flex items-center px-3 py-1.5 text-pb-text hover:bg-pb-hover data-[state=open]:bg-pb-hover cursor-default outline-none';
+  return (
+    <ContextMenu.Sub>
+      <ContextMenu.SubTrigger className={trigCls}>
+        <span className="flex-1">快速规则</span>
+        <span className="text-pb-muted">▸</span>
+      </ContextMenu.SubTrigger>
+      <ContextMenu.Portal>
+        <ContextMenu.SubContent className="min-w-[200px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
+          {presets.map((p) => (
+            <ContextMenu.Item
+              key={p.key}
+              className={itemCls}
+              onSelect={() => onApply(pattern, p)}
+              data-testid={`quick-rule-${p.key}`}
+            >
+              <span className="flex-1">{p.label}</span>
+            </ContextMenu.Item>
+          ))}
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <ContextMenu.Item
+            className={itemCls}
+            onSelect={() => onOpenCustom(pattern)}
+            data-testid="quick-rule-custom"
+          >
+            <span className="flex-1">自定义规则…</span>
+          </ContextMenu.Item>
+        </ContextMenu.SubContent>
+      </ContextMenu.Portal>
+    </ContextMenu.Sub>
   );
 }
 

@@ -179,6 +179,19 @@ export interface RuleSetSummary {
   text: string;
   errors: { lineNo: number; message: string }[];
   rules: { raw: string; lineNo: number; pattern: string; group?: string }[];
+  /** 临时规则集：由 Sidebar 右键"快速规则"创建 */
+  temporary?: boolean;
+}
+
+/** 快速规则输入子窗口的初始参数 */
+export interface RuleQuickInputParams {
+  operator: 'mapRemote' | 'mock' | 'statusCode' | 'resDelay' | 'resBody' | 'mapLocal';
+  pattern: string;
+  /** 该 operator 的显示名，用于窗口标题（如 "响应延迟"）*/
+  label: string;
+  /** 输入字段类型 */
+  inputKind: 'text' | 'textarea' | 'number' | 'file';
+  placeholder?: string;
 }
 
 export interface PluginSummary {
@@ -287,6 +300,12 @@ export interface ProxyBabyBridge {
   rulesUpdate(id: string, patch: { name?: string; text?: string; enabled?: boolean }): Promise<RuleSetSummary | null>;
   rulesRemove(id: string): Promise<boolean>;
   rulesSetEnabled(id: string, enabled: boolean): Promise<boolean>;
+  rulesQuickAdd(args: { pattern: string; operator: string; value?: string }): Promise<RuleSetSummary | null>;
+  rulesQuickAddCustom(args: { pattern: string }): Promise<{ ruleSetId: string; lineNo: number } | null>;
+  rulesClearTemp(): Promise<number>;
+  ruleQuickInputOpen(params: RuleQuickInputParams): Promise<boolean>;
+  ruleQuickInputConsumeInit(): Promise<RuleQuickInputParams | null>;
+  dialogPickFile(): Promise<string | null>;
   // plugins
   pluginsList(): Promise<PluginSummary[]>;
   pluginsSetEnabled(id: string, enabled: boolean): Promise<boolean>;

@@ -203,6 +203,8 @@ export function RulesView() {
   const [docPlugin, setDocPlugin] = useState<PluginSummary | null>(null);
   // 顶部子 tab：规则集 / 脚本
   const [mode, setMode] = useState<'rules' | 'scripts'>('rules');
+  // 规则集左栏 sub-tab：常规 / 临时（Sidebar 右键"快速规则"生成的）
+  const [ruleTab, setRuleTab] = useState<'normal' | 'temporary'>('normal');
 
   const reload = useCallback(async () => {
     const [rs, pl] = await Promise.all([
@@ -265,6 +267,60 @@ export function RulesView() {
   };
 
   const selected = sets.find((s) => s.id === selectedId);
+
+  // 常规/临时 分组
+  const normalSets = sets.filter((s) => !s.temporary);
+  const temporarySets = sets.filter((s) => s.temporary);
+  const visibleSets = ruleTab === 'temporary' ? temporarySets : normalSets;
+
+  // 主进程 broadcast 事件：规则改动 & 光标定位
+  useEffect(() => {
+    const offChanged = window.proxybaby.onEvent('rules:changed' as any, () => reload());
+    const offFocus = window.proxybaby.onEvent('rules:focus-line' as any, (p: any) => {
+      if (!p) return;
+      setMode('rules');
+      // 若是临时规则集，先切到临时 tab
+      // 需异步 —— 让 reload 完成后再选中
+      (async () => {
+        await reload();
+        // 用最新 list 找目标
+        const list = await window.proxybaby.rulesList();
+        const target = list.find((x) => x.id === p.ruleSetId);
+        if (!target) return;
+        setRuleTab(target.temporary ? 'temporary' : 'normal');
+        setSelectedId(target.id);
+        setDraftName(target.name);
+        setDraftText(target.text);
+        setDirty(false);
+        // 光标定位到指定行末尾
+        setTimeout(() => {
+          const ed = editorRef.current;
+          if (!ed) return;
+          const model = ed.getModel();
+          if (!model) return;
+          const line = Math.max(1, Math.min(p.lineNo || model.getLineCount(), model.getLineCount()));
+          const col = model.getLineMaxColumn(line);
+          ed.setPosition({ lineNumber: line, column: col });
+          ed.revealLineInCenter(line);
+          ed.focus();
+        }, 50);
+      })();
+    });
+    return () => { offChanged(); offFocus(); };
+  }, [reload]);
+
+  const clearTemp = async () => {
+    if (!confirm('确定清空全部临时规则？')) return;
+    await window.proxybaby.rulesClearTemp();
+    // 若当前选中的是临时集，清掉选中
+    if (selected?.temporary) {
+      setSelectedId(null);
+      setDraftText('');
+      setDraftName('');
+    }
+    setRuleTab('normal');
+    await reload();
+  };
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const onMount = useCallback((editor: monaco.editor.IStandaloneCodeEditor, mm: Monaco) => {
@@ -331,8 +387,37 @@ export function RulesView() {
           <span className="text-xs uppercase tracking-wide text-pb-muted">规则集</span>
           <button className="pb-btn" onClick={create} title="新建"><Plus size={14} /></button>
         </div>
+        {/* 常规 / 临时 sub-tab（仅当存在临时规则时展示临时 tab）*/}
+        {temporarySets.length > 0 && (
+          <div className="flex items-center gap-1 px-2 py-1 border-b border-pb-border text-xs" data-testid="rules-subtabs">
+            <button
+              data-testid="rules-subtab-normal"
+              className={cn(
+                'px-2 py-0.5 rounded',
+                ruleTab === 'normal' ? 'bg-pb-selected text-white' : 'text-pb-muted hover:bg-pb-hover',
+              )}
+              onClick={() => setRuleTab('normal')}
+            >常规</button>
+            <button
+              data-testid="rules-subtab-temporary"
+              className={cn(
+                'px-2 py-0.5 rounded',
+                ruleTab === 'temporary' ? 'bg-pb-selected text-white' : 'text-pb-muted hover:bg-pb-hover',
+              )}
+              onClick={() => setRuleTab('temporary')}
+            >临时 ({temporarySets.length})</button>
+            {ruleTab === 'temporary' && (
+              <button
+                className="ml-auto text-pb-error hover:underline"
+                onClick={clearTemp}
+                title="清空全部临时规则"
+                data-testid="rules-clear-temp"
+              >清空</button>
+            )}
+          </div>
+        )}
         <div className="flex-1 overflow-auto pb-scroll">
-          {sets.map((s) => (
+          {visibleSets.map((s) => (
             <div
               key={s.id}
               className={cn(
@@ -383,7 +468,11 @@ export function RulesView() {
               </button>
             </div>
           ))}
-          {!sets.length && <div className="p-4 text-xs text-pb-muted">还没有规则集</div>}
+          {!visibleSets.length && (
+            <div className="p-4 text-xs text-pb-muted">
+              {ruleTab === 'temporary' ? '暂无临时规则' : '还没有规则集'}
+            </div>
+          )}
         </div>
 
         <div className="border-t border-pb-border">

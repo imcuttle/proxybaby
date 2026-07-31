@@ -56,6 +56,8 @@ export interface RuleSet {
   text: string;
   rules: Rule[];
   errors: { lineNo: number; message: string }[];
+  /** 临时规则集：由 Sidebar 右键"快速规则"创建，规则页独立 sub-tab 展示 */
+  temporary?: boolean;
 }
 
 const KNOWN_OPS = new Set([

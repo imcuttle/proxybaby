@@ -377,14 +377,14 @@ function showMainWindow() {
 
 /** 通用子窗口打开：hash 路由到 App 里的独立视图（settings/diff） */
 const childWindows = new Map<string, BrowserWindow>();
-function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor', opts: { width?: number; height?: number; title?: string } = {}) {
+function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input', opts: { width?: number; height?: number; title?: string } = {}) {
   const existing = childWindows.get(route);
   if (existing && !existing.isDestroyed()) {
     existing.show();
     existing.focus();
     return;
   }
-  const isSmallDialog = route === 'filter-entry-editor';
+  const isSmallDialog = route === 'filter-entry-editor' || route === 'rule-quick-input';
   const win = new BrowserWindow({
     width: opts.width ?? 900,
     height: opts.height ?? 700,
@@ -622,6 +622,7 @@ function setupIpc() {
     text: rs.text,
     errors: rs.errors,
     rules: rs.rules.map((r: any) => ({ raw: r.raw, lineNo: r.lineNo, pattern: r.pattern, group: r.group })),
+    temporary: rs.temporary,
   });
   ipcMain.handle('rules:list', () => (ruleEngine?.list() ?? []).map(ruleSetSummary));
   ipcMain.handle('rules:get', (_e, id: string) => ruleSetSummary(ruleEngine?.get(id)));
@@ -633,6 +634,75 @@ function setupIpc() {
   ipcMain.handle('rules:set-enabled', (_e, id: string, enabled: boolean) =>
     ruleEngine?.setEnabled(id, enabled),
   );
+
+  // 快速规则（Sidebar 右键） —— 生成一个临时规则集
+  ipcMain.handle('rules:quick-add', (_e, args: { pattern: string; operator: string; value?: string }) => {
+    if (!ruleEngine) return null;
+    const { pattern, operator, value } = args || ({} as any);
+    if (!pattern || !operator) return null;
+    // 拼 whistle 规则行：无值的 operator（abort）单写；有值的走 protocol://value 形式；
+    // 特殊：'raw' 表示 value 本身就是完整 operator 段（如一键 CORS 时预拼好 JSON），直接用；
+    //       'mapRemote' 直接用 targetURL 作为操作段（whistle 语法：pattern  http://...）
+    const opSeg = operator === 'abort'
+      ? 'abort'
+      : operator === 'raw'
+        ? String(value || '')
+        : operator === 'mapRemote'
+          ? String(value || '')
+          : operator === 'mapLocal'
+            ? `file://${value || ''}`
+            : `${operator}://${value ?? ''}`;
+    const line = `${pattern}  ${opSeg}`;
+    const shortOp = operator === 'raw' ? 'cors' : operator;
+    const name = `[临时] ${shortOp} ${pattern}`.slice(0, 80);
+    const rs = ruleEngine.addTemporary(name, line);
+    broadcast('rules:changed', undefined);
+    return ruleSetSummary(rs);
+  });
+
+  ipcMain.handle('rules:quick-add-custom', (_e, args: { pattern: string }) => {
+    if (!ruleEngine) return null;
+    const pattern = args?.pattern || '';
+    if (!pattern) return null;
+    const { ruleSetId, lineNo } = ruleEngine.appendCustomLine(pattern);
+    broadcast('rules:changed', undefined);
+    // 让规则页切到临时 tab + 选中该规则集 + 光标定位
+    broadcast('rules:focus-line', { ruleSetId, lineNo });
+    return { ruleSetId, lineNo };
+  });
+
+  ipcMain.handle('rules:clear-temp', () => {
+    if (!ruleEngine) return 0;
+    const n = ruleEngine.clearTemporary();
+    if (n > 0) broadcast('rules:changed', undefined);
+    return n;
+  });
+
+  // 快速规则参数输入子窗口
+  let pendingRuleQuickInputParams: any = null;
+  ipcMain.handle('ruleQuickInput:open', (_e, params: any) => {
+    pendingRuleQuickInputParams = params;
+    openChildWindow('rule-quick-input', {
+      title: `快速规则 · ${params?.label || ''}`,
+      width: 540,
+      height: 340,
+    });
+    return true;
+  });
+  ipcMain.handle('ruleQuickInput:consumeInit', () => {
+    const p = pendingRuleQuickInputParams;
+    pendingRuleQuickInputParams = null;
+    return p;
+  });
+
+  // 通用文件选择（供 mapLocal 用）
+  ipcMain.handle('dialog:pick-file', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths[0]) return null;
+    return filePaths[0];
+  });
 
   // 插件管理
   ipcMain.handle('plugins:list', () => pluginManager?.list() ?? []);

@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-electron
+.DS_Store
+*.log
+.vite
+release
+test-results
+playwright-report
+.playwright
+coverage
+.env
+.env.local

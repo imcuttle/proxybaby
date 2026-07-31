@@ -1,0 +1,80 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type { IpcEvents, ProxyStatus, CertStatus, Flow, ProxyBabyBridge } from '../shared/types';
+
+const bridge: ProxyBabyBridge = {
+  onEvent(event, handler) {
+    const wrapped = (_: unknown, payload: unknown) => handler(payload as any);
+    ipcRenderer.on(event as string, wrapped);
+    return () => ipcRenderer.removeListener(event as string, wrapped);
+  },
+  getProxyStatus: () => ipcRenderer.invoke('proxy:get-status') as Promise<ProxyStatus>,
+  getCertStatus: () => ipcRenderer.invoke('cert:get-status') as Promise<CertStatus>,
+  toggleRecording: (recording) => ipcRenderer.invoke('proxy:toggle-recording', recording),
+  setSystemProxy: (on) => ipcRenderer.invoke('proxy:set-system', on),
+  setProxyPort: (port) => ipcRenderer.invoke('proxy:set-port', port),
+  querySystemProxy: () => ipcRenderer.invoke('proxy:query-system'),
+  restoreSystemProxyOverride: () => ipcRenderer.invoke('proxy:restore-override'),
+  clearFlows: () => ipcRenderer.invoke('flow:clear'),
+  reinstallCert: () => ipcRenderer.invoke('cert:reinstall'),
+  getFlows: () => ipcRenderer.invoke('flow:all') as Promise<Flow[]>,
+  rulesList: () => ipcRenderer.invoke('rules:list'),
+  rulesAdd: (name, text, enabled) => ipcRenderer.invoke('rules:add', name, text, enabled),
+  rulesUpdate: (id, patch) => ipcRenderer.invoke('rules:update', id, patch),
+  rulesRemove: (id) => ipcRenderer.invoke('rules:remove', id),
+  rulesSetEnabled: (id, enabled) => ipcRenderer.invoke('rules:set-enabled', id, enabled),
+  pluginsList: () => ipcRenderer.invoke('plugins:list'),
+  pluginsSetEnabled: (id, enabled) => ipcRenderer.invoke('plugins:set-enabled', id, enabled),
+  scriptsList: () => ipcRenderer.invoke('scripts:list'),
+  scriptsAdd: (name, code) => ipcRenderer.invoke('scripts:add', name, code),
+  scriptsUpdate: (id, patch) => ipcRenderer.invoke('scripts:update', id, patch),
+  scriptsRemove: (id) => ipcRenderer.invoke('scripts:remove', id),
+  scriptsTest: (id, testCase) => ipcRenderer.invoke('scripts:test', id, testCase),
+  allowBlockGet: () => ipcRenderer.invoke('allowBlock:get'),
+  allowBlockSet: (cfg) => ipcRenderer.invoke('allowBlock:set', cfg),
+  sslListGet: () => ipcRenderer.invoke('sslList:get'),
+  sslListSet: (cfg) => ipcRenderer.invoke('sslList:set', cfg),
+  networkGetProfile: () => ipcRenderer.invoke('network:get'),
+  networkSetProfile: (key) => ipcRenderer.invoke('network:set', key),
+  upstreamProxyGet: () => ipcRenderer.invoke('upstreamProxy:get'),
+  upstreamProxySet: (cfg) => ipcRenderer.invoke('upstreamProxy:set', cfg),
+  composerSend: (req) => ipcRenderer.invoke('composer:send', req),
+  openWindow: (route, opts) => ipcRenderer.invoke('window:open', route, opts),
+  closeSelfWindow: () => ipcRenderer.invoke('window:close-self'),
+  broadcast: (channel, payload) => ipcRenderer.invoke('window:broadcast', channel, payload),
+  filterEntryEditorOpen: (params) => ipcRenderer.invoke('filterEntryEditor:open', params),
+  filterEntryEditorConsumeInit: () => ipcRenderer.invoke('filterEntryEditor:consumeInit'),
+  breakpointResume: (payload) => ipcRenderer.invoke('breakpoint:resume', payload),
+  sessionExport: (format) => ipcRenderer.invoke('session:export', format),
+  sessionExportFlows: (format, ids) => ipcRenderer.invoke('session:export-flows', format, ids),
+  sessionImport: () => ipcRenderer.invoke('session:import'),
+  flowRemove: (id) => ipcRenderer.invoke('flow:remove', id),
+  flowRepeat: (id, patch) => ipcRenderer.invoke('flow:repeat', id, patch),
+  flowSetNote: (id, note) => ipcRenderer.invoke('flow:set-note', id, note),
+  flowSetHighlight: (id, color) => ipcRenderer.invoke('flow:set-highlight', id, color),
+  mitmDisableHost: (host, disabled) => ipcRenderer.invoke('mitm:disable-host', host, disabled),
+  showInFinder: (filePath) => ipcRenderer.invoke('shell:show-in-finder', filePath),
+  fsListDir: (dirPath) => ipcRenderer.invoke('fs:list-dir', dirPath),
+  // AI
+  aiListSessions: () => ipcRenderer.invoke('ai:list-sessions'),
+  aiGetCurrent: () => ipcRenderer.invoke('ai:get-current'),
+  aiCreateSession: (title) => ipcRenderer.invoke('ai:create-session', title),
+  aiSwitchSession: (id) => ipcRenderer.invoke('ai:switch-session', id),
+  aiRenameSession: (id, title) => ipcRenderer.invoke('ai:rename-session', id, title),
+  aiDeleteSession: (id) => ipcRenderer.invoke('ai:delete-session', id),
+  aiSend: (markdown, attachedFlowIds) => ipcRenderer.invoke('ai:send', markdown, attachedFlowIds),
+  aiInterrupt: () => ipcRenderer.invoke('ai:interrupt'),
+  aiGetConfig: () => ipcRenderer.invoke('ai:get-config'),
+  aiSetConfig: (patch) => ipcRenderer.invoke('ai:set-config', patch),
+  aiListSkills: () => ipcRenderer.invoke('ai:list-skills'),
+  aiPickFile: () => ipcRenderer.invoke('ai:pick-file'),
+};
+
+contextBridge.exposeInMainWorld('proxybaby', bridge);
+
+// E2E 注入通道（仅测试模式）
+if (process.env.PROXYBABY_E2E === '1') {
+  contextBridge.exposeInMainWorld('__pbE2E', {
+    emit: (event: string, payload: unknown) => ipcRenderer.invoke('__e2e:emit', event, payload),
+    aiEmit: (obj: unknown) => ipcRenderer.invoke('__e2e:ai-emit', obj),
+  });
+}

@@ -140,6 +140,7 @@ interface FlowState {
   onWSMessage(id: string, message: WSMessage): void;
   onResponseBody(id: string, bodyText?: string, bodyBase64?: string, bodySize?: number): void;
   onFlowEnd(id: string, durationMs: number, status: Flow['status'], error?: string): void;
+  onAppInfo(id: string, app: NonNullable<Flow['app']>): void;
   clear(): void;
   setProxyStatus(s: ProxyStatus): void;
   setCertStatus(s: CertStatus): void;
@@ -432,6 +433,12 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const f = get().byId[id];
     if (!f) return;
     const next: Flow = { ...f, durationMs, status, errorMessage: error };
+    replaceFlow(set, get, next);
+  },
+  onAppInfo: (id, app) => {
+    const f = get().byId[id];
+    if (!f) return;
+    const next: Flow = { ...f, app };
     replaceFlow(set, get, next);
   },
   clear: () => set({ flows: [], byId: {}, selectedId: null, selectedIds: {} }),

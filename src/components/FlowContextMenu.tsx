@@ -296,7 +296,7 @@ function Item({
       }
     >
       <span className="flex-1">{children}</span>
-      {shortcut && <span className="ml-4 text-pb-muted text-[11px] font-mono">{shortcut}</span>}
+      {shortcut && <span className="ml-4 text-pb-muted text-xs font-mono">{shortcut}</span>}
     </ContextMenu.Item>
   );
 }

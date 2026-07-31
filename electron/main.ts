@@ -275,6 +275,10 @@ function wireProxyEvents(p: ProxyServer) {
     store.finalize(payload.id, payload.durationMs, payload.status, payload.error);
     broadcast('flow:end', payload);
   });
+  p.on('flow:app-info', (payload) => {
+    store.updateAppInfo(payload.id, payload.app);
+    broadcast('flow:app-info', payload);
+  });
 }
 
 function broadcast(event: string, payload: unknown) {
@@ -756,6 +760,7 @@ function setupIpc() {
         case 'flow:ws-message': store.appendWSMessage(payload.id, payload.message); break;
         case 'flow:response-body': store.updateResponseBody(payload.id, payload.bodyText, payload.bodyBase64, payload.bodySize); break;
         case 'flow:end': store.finalize(payload.id, payload.durationMs, payload.status, payload.error); break;
+        case 'flow:app-info': store.updateAppInfo(payload.id, payload.app); break;
         case 'flow:breakpoint': break;
       }
       broadcast(event, payload);

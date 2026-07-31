@@ -171,6 +171,7 @@ function MainWindow() {
   const onWSMessage = useFlowStore((s) => s.onWSMessage);
   const onResponseBody = useFlowStore((s) => s.onResponseBody);
   const onFlowEnd = useFlowStore((s) => s.onFlowEnd);
+  const onAppInfo = useFlowStore((s) => s.onAppInfo);
   const setProxyStatus = useFlowStore((s) => s.setProxyStatus);
   const setCertStatus = useFlowStore((s) => s.setCertStatus);
   const setSystemProxyOverride = useFlowStore((s) => s.setSystemProxyOverride);
@@ -213,6 +214,7 @@ function MainWindow() {
     const off6 = api.onEvent('flow:end', (p) =>
       onFlowEnd(p.id, p.durationMs, p.status, p.error),
     );
+    const offAppInfo = api.onEvent('flow:app-info', (p) => onAppInfo(p.id, p.app));
     const off7 = api.onEvent('proxy:status', setProxyStatus);
     const off8 = api.onEvent('cert:status', setCertStatus);
     const offOverride = api.onEvent('proxy:override', setSystemProxyOverride);
@@ -231,7 +233,7 @@ function MainWindow() {
     const offAi7 = api.onEvent('ai:error' as any, (p: any) => useAiStore.getState().onError(p.sessionId, p.error));
     return () => {
       off1(); off2(); off3(); off4(); offWs(); off5(); off6(); off7(); off8(); offBp();
-      offTraffic(); offRemove(); offOverride();
+      offTraffic(); offRemove(); offOverride(); offAppInfo();
       offAi1(); offAi2(); offAi3(); offAi4(); offAi5(); offAi6(); offAi7();
     };
   }, [
@@ -243,6 +245,7 @@ function MainWindow() {
     onWSMessage,
     onResponseBody,
     onFlowEnd,
+    onAppInfo,
     setProxyStatus,
     setCertStatus,
     setSystemProxyOverride,

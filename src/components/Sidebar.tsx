@@ -290,7 +290,7 @@ function AppContextMenu({
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>
             <span className="flex-1">删除</span>
-            <span className="ml-4 text-pb-muted text-[11px] font-mono">⌘⌫</span>
+            <span className="ml-4 text-pb-muted text-xs font-mono">⌘⌫</span>
           </ContextMenu.Item>
           <div className="hidden">{name}</div>
         </ContextMenu.Content>

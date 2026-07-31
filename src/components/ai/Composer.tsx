@@ -475,7 +475,13 @@ export function Composer({ onSend, disabled }: Props) {
           </div>
         </div>
       )}
-      <div className="mt-1 text-[10px] text-pb-muted">Enter 发送 · Shift+Enter 换行 · @ 引用抓包/规则/插件/Skill/文件</div>
+      <div className="mt-1 text-xs text-pb-muted flex items-center flex-wrap gap-x-2 gap-y-1">
+        <span className="inline-flex items-center gap-1"><kbd className="inline-flex items-center rounded border border-pb-border bg-pb-bg/60 px-1.5 py-[1px] font-mono leading-none">Enter</kbd> 发送</span>
+        <span className="text-pb-muted">·</span>
+        <span className="inline-flex items-center gap-1"><kbd className="inline-flex items-center rounded border border-pb-border bg-pb-bg/60 px-1.5 py-[1px] font-mono leading-none">⇧Enter</kbd> 换行</span>
+        <span className="text-pb-muted">·</span>
+        <span className="inline-flex items-center gap-1"><kbd className="inline-flex items-center rounded border border-pb-border bg-pb-bg/60 px-1.5 py-[1px] font-mono leading-none">@</kbd> 引用抓包/规则/插件/Skill/文件</span>
+      </div>
     </div>
   );
 }

@@ -97,6 +97,7 @@ export interface IpcEvents {
   'flow:breakpoint': { id: string; stage: 'request' | 'response'; request: RequestData; response?: ResponseData };
   'flow:response-body': { id: string; bodyText?: string; bodyBase64?: string; bodySize: number };
   'flow:end': { id: string; durationMs: number; status: FlowStatus; error?: string };
+  'flow:app-info': { id: string; app: AppInfo };
   'flow:remove': { id: string };
   'proxy:status': ProxyStatus;
   'proxy:traffic': { totalBytes: number; rxRate: number; txRate: number };

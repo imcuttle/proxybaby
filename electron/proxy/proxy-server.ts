@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import zlib from 'node:zlib';
 
 import { ensureRootCA, issueLeaf } from '../mitm/ca';
-import { lookupByPort } from '../system/process-lookup';
+import { lookupByPort, lookupByPortCached } from '../system/process-lookup';
 import { SSEParser } from './sse-parser';
 import { WSParser } from './ws-parser';
 import { ProxyContext, runMiddlewares, type Middleware } from '../engine/context';
@@ -162,7 +162,7 @@ export class ProxyServer extends EventEmitter {
       return this.passthrough(req, res, isTLS);
     }
 
-    const flow = await this.buildFlow(req, isTLS);
+    const flow = this.buildFlow(req, isTLS);
     this.emit('flow:start', flow);
 
     const plugins = this.plugins;
@@ -537,7 +537,7 @@ export class ProxyServer extends EventEmitter {
       return this.passthroughUpgrade(req, clientSocket, head, isTLS);
     }
 
-    const flow = await this.buildFlow(req, isTLS);
+    const flow = this.buildFlow(req, isTLS);
     flow.isWebSocket = true;
     flow.wsMessages = [];
     flow.status = 'streaming';
@@ -655,8 +655,10 @@ export class ProxyServer extends EventEmitter {
     let appName: string | undefined;
     const remotePort = clientSocket.remotePort;
     if (remotePort && sslList) {
-      // 仅在 sslList 存在时才做反查，避免不必要 lsof 开销
-      try { appName = (await lookupByPort(remotePort))?.name; } catch {}
+      // 关键路径不阻塞：只读缓存；未命中就按 host 判断（99% 场景够用），
+      // 同时后台触发一次 lookup 补缓存，供后续同端口连接命中。
+      appName = lookupByPortCached(remotePort)?.name;
+      if (!appName) lookupByPort(remotePort).catch(() => {});
     }
     const bypassMitm = this.mitmDisabledHosts.has(host) || (sslList && !sslList.shouldDecrypt({ host, appName }));
     if (bypassMitm) {
@@ -735,7 +737,7 @@ export class ProxyServer extends EventEmitter {
     return new URL(`${scheme}://${host}${req.url || '/'}`);
   }
 
-  private async buildFlow(req: IncomingMessage, isTLS: boolean): Promise<Flow> {
+  private buildFlow(req: IncomingMessage, isTLS: boolean): Flow {
     const url = this.buildTargetURL(req, isTLS);
     const reqHeaders: Header[] = [];
     for (let i = 0; i < req.rawHeaders.length; i += 2) {
@@ -755,18 +757,31 @@ export class ProxyServer extends EventEmitter {
       startedAt: Date.now(),
     };
     const remotePort = req.socket.remotePort;
-    let app;
-    if (remotePort) {
-      app = (await lookupByPort(remotePort)) || undefined;
-    }
-    return {
+    // app 反查（lsof）不能阻塞关键路径 —— 它只是 UI 元数据，晚几十/几百毫秒到达完全无关紧要。
+    // 首选 in-memory 缓存快速填充；未命中就先留空，后台异步反查完成后通过 flow:app-info 事件补上。
+    const cachedApp = remotePort ? lookupByPortCached(remotePort) || undefined : undefined;
+    const flow: Flow = {
       id: randomUUID(),
       status: 'pending',
-      app,
+      app: cachedApp,
       request,
       sseFrames: [],
       isTLS,
     };
+    if (remotePort && !cachedApp) {
+      this.enrichAppInfoAsync(flow.id, remotePort);
+    }
+    return flow;
+  }
+
+  /**
+   * 后台异步反查发起进程；完成后 emit 一个独立事件（不影响转发主路径）。
+   * 结果失败或与已有 app 相同都不 emit，避免不必要 IPC。
+   */
+  private enrichAppInfoAsync(flowId: string, remotePort: number) {
+    lookupByPort(remotePort).then((app) => {
+      if (app) this.emit('flow:app-info', { id: flowId, app });
+    }).catch(() => {});
   }
 
   // 通过上游 HTTP 代理建立到 targetHost:targetPort 的隧道，然后包一层 TLS 出去。

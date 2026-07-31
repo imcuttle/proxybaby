@@ -136,9 +136,12 @@ jobs:
 
       - name: Extract release notes from CHANGELOG.md
         run: |
-          node scripts/extract-changelog.mjs "${{ steps.ver.outputs.version }}" > /tmp/notes.md \
-            || echo "Release v${{ steps.ver.outputs.version }}" > /tmp/notes.md
+          # extract-changelog.mjs never fails; it falls back to "Release vX.Y.Z"
+          # if the section isn't found. So we can pipe directly.
+          node scripts/extract-changelog.mjs "${{ steps.ver.outputs.version }}" > /tmp/notes.md
+          echo "--- release notes ---"
           cat /tmp/notes.md
+          echo "--- end ---"
 
       - name: Create GitHub Release
         env:

@@ -726,3 +726,57 @@ test('系统代理被覆盖：override 清空后按钮消失', async () => {
   });
   await expect(page.getByTestId('proxy-override-btn')).toHaveCount(0);
 });
+
+// ============ 新特性：快捷键 ⌥⌘O 切换系统代理 / ⌥⌘R 切换抓包 ============
+
+test('快捷键 ⌥⌘O 触发 setSystemProxy IPC；⌥⌘R 触发 toggleRecording', async () => {
+  // 注入 spy：替换 window.proxybaby.setSystemProxy / toggleRecording 记录调用，避免真的动系统代理。
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__pbSpy = { sysCalls: [] as boolean[], recCalls: [] as boolean[] };
+    const orig = w.proxybaby;
+    w.__pbOrigProxybaby = {
+      setSystemProxy: orig.setSystemProxy,
+      toggleRecording: orig.toggleRecording,
+    };
+    orig.setSystemProxy = async (on: boolean) => {
+      w.__pbSpy.sysCalls.push(on);
+      // 返回一个合成 status，让 store 更新，便于断言
+      return { running: true, host: '127.0.0.1', port: 9998, systemProxyApplied: on, recording: true };
+    };
+    orig.toggleRecording = async (on: boolean) => {
+      w.__pbSpy.recCalls.push(on);
+      return { running: true, host: '127.0.0.1', port: 9998, systemProxyApplied: false, recording: on };
+    };
+  });
+
+  // 确保 store 里 proxyStatus 有值 —— 主进程启动时会广播一次，等它到达
+  await page.waitForFunction(() => !!(window as any).__pbStore?.getState?.().proxyStatus, null, { timeout: 5000 });
+  // 设一个已知初值：系统代理关，抓包中
+  await page.evaluate(() => {
+    (window as any).__pbStore.getState().setProxyStatus({
+      running: true, host: '127.0.0.1', port: 9998, systemProxyApplied: false, recording: true,
+    });
+  });
+
+  // 触发 ⌥⌘O：系统代理应被开
+  await page.keyboard.press('Meta+Alt+o');
+  await expect.poll(() => page.evaluate(() => (window as any).__pbSpy.sysCalls.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__pbSpy.sysCalls[0])).toBe(true);
+
+  // 再触发一次 ⌥⌘O：应被关
+  await page.keyboard.press('Meta+Alt+o');
+  await expect.poll(() => page.evaluate(() => (window as any).__pbSpy.sysCalls.length)).toBe(2);
+  expect(await page.evaluate(() => (window as any).__pbSpy.sysCalls[1])).toBe(false);
+
+  // 触发 ⌥⌘R：抓包应被暂停（当前 recording=true → 传 false）
+  await page.keyboard.press('Meta+Alt+r');
+  await expect.poll(() => page.evaluate(() => (window as any).__pbSpy.recCalls.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__pbSpy.recCalls[0])).toBe(false);
+
+  // 还原 spy，避免影响后续测试
+  await page.evaluate(() => {
+    const w = window as any;
+    Object.assign(w.proxybaby, w.__pbOrigProxybaby);
+  });
+});

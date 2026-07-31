@@ -247,7 +247,7 @@ export function StatusBar() {
                     'pb-btn px-2 py-0.5 flex items-center gap-1',
                     proxyStatus.systemProxyApplied ? 'text-pb-success' : 'text-pb-muted',
                   )}
-                  title={`本地 ${proxyStatus.host}:${proxyStatus.port} · 系统代理${proxyStatus.systemProxyApplied ? '已开' : '已关'} · ${proxyStatus.recording ? '抓包中' : '已暂停'}`}
+                  title={`本地 ${proxyStatus.host}:${proxyStatus.port} · 系统代理${proxyStatus.systemProxyApplied ? '已开' : '已关'} · ${proxyStatus.recording ? '抓包中' : '已暂停'}\n快捷键：⌥⌘O 开/关系统代理 · ⌥⌘R 开/关抓包`}
                 >
                   {proxyStatus.systemProxyApplied ? <Wifi size={12} /> : <WifiOff size={12} />}
                   代理 {proxyStatus.host}:{proxyStatus.port}

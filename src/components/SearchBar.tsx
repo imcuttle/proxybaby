@@ -382,15 +382,27 @@ export function SearchBar({ onNavigate }: { onNavigate?: (dir: 'next' | 'prev') 
       )}
 
       {/* 快捷键提示（低干扰） */}
-      <div className="px-3 pb-1.5 text-[11px] text-pb-muted font-mono flex items-center gap-3">
-        <span>显示: ⌘F</span>
-        <span>新建: ⌘N</span>
-        <span>删除: ⇧⌘N</span>
-        <span>向上: ⌘↑</span>
-        <span>向下: ⌘↓</span>
-        <span>开/关: ⌘B</span>
-        <span>隐藏: ESC</span>
+      <div className="px-3 pb-1.5 text-xs text-pb-muted flex items-center flex-wrap gap-x-3 gap-y-1">
+        <HintKey label="显示">⌘F</HintKey>
+        <HintKey label="新建">⌘N</HintKey>
+        <HintKey label="删除">⇧⌘N</HintKey>
+        <HintKey label="向上">⌘↑</HintKey>
+        <HintKey label="向下">⌘↓</HintKey>
+        <HintKey label="开/关">⌘B</HintKey>
+        <HintKey label="隐藏">ESC</HintKey>
       </div>
     </div>
+  );
+}
+
+/** 快捷键提示：label + 单色描边的 kbd chip，字号较原来 11px 提大到 xs+ */
+function HintKey({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span>{label}</span>
+      <kbd className="inline-flex items-center rounded border border-pb-border bg-pb-bg/60 px-1.5 py-[1px] text-xs font-mono text-pb-text/90 leading-none">
+        {children}
+      </kbd>
+    </span>
   );
 }

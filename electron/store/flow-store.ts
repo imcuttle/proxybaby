@@ -2,7 +2,7 @@
  * 内存中的 Flow 会话存储。
  * 上限保护：超过 MAX_FLOWS 时丢弃最早的（FIFO），避免长时间抓包内存爆炸。
  */
-import type { Flow, SSEFrame, ResponseData, WSMessage } from '../../shared/types';
+import type { Flow, SSEFrame, ResponseData, WSMessage, AppInfo } from '../../shared/types';
 
 const MAX_FLOWS = 5000;
 
@@ -74,6 +74,12 @@ export class FlowStore {
     f.durationMs = durationMs;
     f.status = status;
     if (error) f.errorMessage = error;
+  }
+
+  updateAppInfo(id: string, app: AppInfo) {
+    const f = this.byId.get(id);
+    if (!f) return;
+    f.app = app;
   }
 
   remove(id: string): boolean {

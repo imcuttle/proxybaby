@@ -35,6 +35,18 @@ const bundleIdCache = new Map<string, string | undefined>();
 // execPath -> icon data URL（bundle 不存在时的兜底缓存）
 const execIconCache = new Map<string, string>();
 
+/**
+ * 只查 in-memory 缓存的同步版本，用于**关键路径**上不能等 lsof 的调用点
+ * （例如 onConnect / onRequest —— 阻塞在这里会推迟上游请求发出、拉长首字节 TTFB）。
+ * 缓存未命中时返回 null，调用方应把真正的 `lookupByPort` 丢到后台去做，
+ * 结果稍后通过独立事件补给 flow。
+ */
+export function lookupByPortCached(port: number): AppInfo | null {
+  const hit = cache.get(port);
+  if (hit && hit.expiresAt > Date.now()) return hit.info;
+  return null;
+}
+
 export async function lookupByPort(port: number): Promise<AppInfo | null> {
   const now = Date.now();
   const hit = cache.get(port);

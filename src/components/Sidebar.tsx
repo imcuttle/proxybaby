@@ -4,6 +4,7 @@ import * as ContextMenu from '@radix-ui/react-context-menu';
 import { ChevronDown, ChevronRight, Globe, Package, Pin, Bookmark, PanelLeftClose } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { cn } from '../lib/cn';
+import type { FilterKind, FilterEntry } from '../../shared/types';
 
 export function Sidebar() {
   const flows = useFlowStore((s) => s.flows);
@@ -126,6 +127,42 @@ export function Sidebar() {
     window.proxybaby.showInFinder(bundlePath);
   };
 
+  const deleteHostFlows = async (host: string, prefix?: string) => {
+    const ids = flows.filter((f) => {
+      if (f.request.host !== host) return false;
+      if (prefix && !`${f.request.host}${f.request.path}`.startsWith(prefix)) return false;
+      return true;
+    }).map((f) => f.id);
+    for (const id of ids) removeFlow(id);
+    for (const id of ids) {
+      try { await window.proxybaby.flowRemove(id); } catch {}
+    }
+    if (filter.host === host) setFilter({ host: undefined, pathPrefix: undefined });
+  };
+
+  /**
+   * 把一条 app/host/url 快速加入 Allow 或 Block 列表。
+   * 语义：读取当前 config → 若已存在同 kind+value 则忽略；否则追加一条 enabled 的 entry。
+   * 同时把 mode 切到用户选的（'allow' / 'block'），保证"加了就立刻生效"。
+   * URL kind 默认按 glob 前缀（`prefix*`）匹配。
+   */
+  const addToAllowBlockList = async (kind: FilterKind, value: string, mode: 'allow' | 'block') => {
+    try {
+      const cur = await window.proxybaby.allowBlockGet();
+      const val = kind === 'url' ? (value.endsWith('*') ? value : `${value}*`) : value;
+      const exists = cur.entries.some((e) => e.kind === kind && e.value === val);
+      const entries: FilterEntry[] = exists
+        ? cur.entries
+        : [
+            ...cur.entries,
+            { id: `sb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              kind, value: val, enabled: true,
+              ...(kind === 'url' ? { urlMode: 'glob' as const } : {}) },
+          ];
+      await window.proxybaby.allowBlockSet({ mode, entries });
+    } catch {}
+  };
+
   return (
     <div className="h-full bg-pb-sidebar flex flex-col" data-testid="sidebar">
       <div className="shrink-0 h-7 px-2 flex items-center justify-end border-b border-pb-border">
@@ -172,6 +209,7 @@ export function Sidebar() {
                 onAlphaSort={() => setAlphaSort((v) => !v)}
                 onReveal={() => revealInFinder(meta.bundlePath)}
                 onDelete={() => deleteAppFlows(name, meta.flowIds)}
+                onAddToList={(mode) => addToAllowBlockList('app', name, mode)}
               >
                 <Item
                   icon={meta.iconDataUrl
@@ -202,6 +240,16 @@ export function Sidebar() {
               filter={filter}
               setFilter={setFilter}
               query={q}
+              sslDisabled={!!mitmDisabledHosts[host]}
+              onToggleSsl={() => {
+                const cur = !!mitmDisabledHosts[host];
+                toggleMitmDisabledHost(host);
+                window.proxybaby.mitmDisableHost(host, !cur);
+              }}
+              onAddToList={(mode) => addToAllowBlockList('host', host, mode)}
+              onAddUrlToList={(prefix, mode) => addToAllowBlockList('url', prefix, mode)}
+              onDeleteHost={() => deleteHostFlows(host)}
+              onDeleteSubpath={(prefix) => deleteHostFlows(host, prefix)}
             />
           ))}
           {q && filteredHosts.length === 0 && (
@@ -222,6 +270,7 @@ function AppContextMenu({
   onAlphaSort,
   onReveal,
   onDelete,
+  onAddToList,
   children,
 }: {
   name: string;
@@ -232,6 +281,7 @@ function AppContextMenu({
   onAlphaSort: () => void;
   onReveal: () => void;
   onDelete: () => void;
+  onAddToList: (mode: 'allow' | 'block') => void;
   children: React.ReactNode;
 }) {
   const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
@@ -254,6 +304,14 @@ function AppContextMenu({
           </ContextMenu.Item>
           <ContextMenu.Item onSelect={onReveal} className={itemCls}>
             <span className="flex-1">在访达中显示…</span>
+          </ContextMenu.Item>
+
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
+            <span className="flex-1">加入允许列表</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
+            <span className="flex-1">加入阻止列表</span>
           </ContextMenu.Item>
 
           <ContextMenu.Sub>
@@ -306,6 +364,12 @@ function HostItem({
   filter,
   setFilter,
   query,
+  sslDisabled,
+  onToggleSsl,
+  onAddToList,
+  onAddUrlToList,
+  onDeleteHost,
+  onDeleteSubpath,
 }: {
   host: string;
   count: number;
@@ -313,6 +377,12 @@ function HostItem({
   filter: any;
   setFilter: (p: any) => void;
   query?: string;
+  sslDisabled: boolean;
+  onToggleSsl: () => void;
+  onAddToList: (mode: 'allow' | 'block') => void;
+  onAddUrlToList: (prefix: string, mode: 'allow' | 'block') => void;
+  onDeleteHost: () => void;
+  onDeleteSubpath: (prefix: string) => void;
 }) {
   // 若 host 未命中但仅子路径命中 → 默认展开以便看到匹配项
   const hostMatched = !query || host.toLowerCase().includes(query);
@@ -323,36 +393,145 @@ function HostItem({
   const hostActive = filter.host === host && !filter.pathPrefix;
   return (
     <div>
-      <div className={cn('w-full flex items-center gap-1 pl-4 pr-2 py-1 text-sm hover:bg-pb-hover', hostActive && 'bg-pb-selected text-white')}>
-        <button onClick={() => setOpen((o) => !o)} className="text-pb-muted shrink-0">
-          {subpaths.length > 1 ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />) : <span className="inline-block w-[11px]" />}
-        </button>
-        <Globe size={12} className="text-pb-muted shrink-0" />
-        <button
-          className="flex-1 truncate text-left"
-          onClick={() => setFilter({ host: filter.host === host && !filter.pathPrefix ? undefined : host, pathPrefix: undefined, appName: undefined, special: undefined })}
+      <HostContextMenu
+        host={host}
+        sslDisabled={sslDisabled}
+        onToggleSsl={onToggleSsl}
+        onAddToList={onAddToList}
+        onDelete={onDeleteHost}
+      >
+        <div
+          className={cn(
+            'w-full flex items-center gap-1 pl-4 pr-2 py-1 text-sm cursor-default',
+            // 选中项 hover 时也保持蓝底：把 hover 灰底只应用在未选中项
+            hostActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+          )}
         >
-          <Highlight text={host} query={query} />
-        </button>
-        <span className="text-xs text-pb-muted">{count}</span>
-      </div>
+          <button onClick={() => setOpen((o) => !o)} className="text-pb-muted shrink-0">
+            {subpaths.length > 1 ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />) : <span className="inline-block w-[11px]" />}
+          </button>
+          <Globe size={12} className={cn('shrink-0', hostActive ? 'text-white' : 'text-pb-muted')} />
+          <button
+            className="flex-1 truncate text-left"
+            onClick={() => setFilter({ host: filter.host === host && !filter.pathPrefix ? undefined : host, pathPrefix: undefined, appName: undefined, special: undefined })}
+          >
+            <Highlight text={host} query={query} />
+          </button>
+          <span className={cn('text-xs', hostActive ? 'text-white/80' : 'text-pb-muted')}>{count}</span>
+        </div>
+      </HostContextMenu>
       {open && visibleSubs.map(([seg, c]) => {
         const prefix = `${host}${seg}`;
+        const active = filter.pathPrefix === prefix;
         return (
-          <button
+          <SubpathContextMenu
             key={seg}
-            data-testid="subpath-item"
-            className={cn('w-full flex items-center gap-1.5 pl-10 pr-2 py-1 text-xs hover:bg-pb-hover', filter.pathPrefix === prefix && 'bg-pb-selected text-white')}
-            onClick={() => setFilter({ host, pathPrefix: filter.pathPrefix === prefix ? undefined : prefix, appName: undefined, special: undefined })}
+            prefix={prefix}
+            onAddToList={(mode) => onAddUrlToList(prefix, mode)}
+            onDelete={() => onDeleteSubpath(prefix)}
           >
-            <span className="flex-1 truncate text-left font-mono">
-              <Highlight text={seg} query={query} />
-            </span>
-            <span className="text-pb-muted">{c}</span>
-          </button>
+            <button
+              data-testid="subpath-item"
+              className={cn(
+                'w-full flex items-center gap-1.5 pl-10 pr-2 py-1 text-xs cursor-default',
+                active ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+              )}
+              onClick={() => setFilter({ host, pathPrefix: filter.pathPrefix === prefix ? undefined : prefix, appName: undefined, special: undefined })}
+            >
+              <span className="flex-1 truncate text-left font-mono">
+                <Highlight text={seg} query={query} />
+              </span>
+              <span className={cn(active ? 'text-white/80' : 'text-pb-muted')}>{c}</span>
+            </button>
+          </SubpathContextMenu>
         );
       })}
     </div>
+  );
+}
+
+/** 域名（host）行的右键菜单。 */
+function HostContextMenu({
+  host,
+  sslDisabled,
+  onToggleSsl,
+  onAddToList,
+  onDelete,
+  children,
+}: {
+  host: string;
+  sslDisabled: boolean;
+  onToggleSsl: () => void;
+  onAddToList: (mode: 'allow' | 'block') => void;
+  onDelete: () => void;
+  children: React.ReactNode;
+}) {
+  const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
+  const destructiveCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-error hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="min-w-[200px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
+          <ContextMenu.Item onSelect={onToggleSsl} className={itemCls}>
+            <span className="flex-1">{sslDisabled ? '启用 SSL 代理' : '禁用 SSL 代理'}</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => navigator.clipboard?.writeText(host).catch(() => {})} className={itemCls}>
+            <span className="flex-1">复制域名</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
+            <span className="flex-1">加入允许列表</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
+            <span className="flex-1">加入阻止列表</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>
+            <span className="flex-1">删除该域下所有请求</span>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  );
+}
+
+/** URL 前缀（subpath）行的右键菜单。 */
+function SubpathContextMenu({
+  prefix,
+  onAddToList,
+  onDelete,
+  children,
+}: {
+  prefix: string;
+  onAddToList: (mode: 'allow' | 'block') => void;
+  onDelete: () => void;
+  children: React.ReactNode;
+}) {
+  const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
+  const destructiveCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-error hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="min-w-[200px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
+          <ContextMenu.Item onSelect={() => navigator.clipboard?.writeText(prefix).catch(() => {})} className={itemCls}>
+            <span className="flex-1">复制 URL 前缀</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
+            <span className="flex-1">加入允许列表（URL）</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
+            <span className="flex-1">加入阻止列表（URL）</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
+          <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>
+            <span className="flex-1">删除该前缀下所有请求</span>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -400,16 +579,17 @@ function Item({
     <div
       onClick={onClick}
       className={cn(
-        'w-full flex items-center gap-1.5 pl-6 pr-2 py-1 text-sm hover:bg-pb-hover cursor-default select-none',
-        active && 'bg-pb-selected text-white',
+        'w-full flex items-center gap-1.5 pl-6 pr-2 py-1 text-sm cursor-default select-none',
+        // 选中项 hover 时也保持蓝底：hover 灰底只在未选中时应用
+        active ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
       )}
     >
-      <span className="text-pb-muted">{icon}</span>
+      <span className={cn(active ? 'text-white' : 'text-pb-muted')}>{icon}</span>
       <span className="flex-1 truncate text-left">
         <Highlight text={label} query={query} />
       </span>
-      {pinned && <Pin size={10} className="text-pb-accent" />}
-      {count !== undefined && <span className="text-xs text-pb-muted">{count}</span>}
+      {pinned && <Pin size={10} className={cn(active ? 'text-white' : 'text-pb-accent')} />}
+      {count !== undefined && <span className={cn('text-xs', active ? 'text-white/80' : 'text-pb-muted')}>{count}</span>}
     </div>
   );
 }

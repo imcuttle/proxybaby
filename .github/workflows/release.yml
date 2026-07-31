@@ -59,12 +59,15 @@ jobs:
           npm run test:unit
 
       - name: Build renderer
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
         run: npx vite build
 
       - name: Build electron app (dmg + zip, unsigned)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: '--max-old-space-size=8192'
         run: npx electron-builder --mac dmg zip -c.mac.identity=null --publish never
 
       - name: Extract release notes from CHANGELOG.md

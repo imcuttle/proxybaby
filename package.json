@@ -1,6 +1,6 @@
 {
   "name": "proxybaby",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Free & open-source HTTP(S) proxy debugger for macOS / Windows / Linux with a built-in AI/SSE beautifier.",
   "author": {
     "name": "imcuttle",
@@ -85,8 +85,20 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64", "arm64"] },
-        { "target": "zip",  "arch": ["x64", "arm64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -98,8 +110,20 @@
     },
     "linux": {
       "target": [
-        { "target": "AppImage", "arch": ["x64", "arm64"] },
-        { "target": "deb",      "arch": ["x64", "arm64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "category": "Development"
     },

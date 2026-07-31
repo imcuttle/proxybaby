@@ -70,3 +70,13 @@
   }
   .pb-markdown hr { @apply my-4 border-pb-border; }
 }
+
+/*
+ * Radix Popper 兜底：Content 内部 `data-side` 只在 useLayoutEffect 定位完成后写入。
+ * 未完成时把 Content 隐藏，避免右键菜单 / Popover 首帧闪现在左上角/其他位置。
+ * 参考 https://github.com/radix-ui/primitives/issues/1927
+ */
+[data-radix-popper-content-wrapper] > *:not([data-side]) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

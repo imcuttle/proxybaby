@@ -85,7 +85,7 @@ Legend: ✅ supported · ⚠️ partial / paid · ❌ none
 | Feature | **ProxyBaby** | Proxyman | Charles | Fiddler Classic | mitmproxy | whistle |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | Price / License | 🆓 MIT free | 💰 PRO paid | 💰 30-day trial | 🆓 (Win) | 🆓 OSS | 🆓 OSS |
-| Platform | macOS | mac / Win / Linux | all | Windows | all (CLI) | all (Web) |
+| Platform | mac / Win / Linux | mac / Win / Linux | all | Windows | all (CLI) | all (Web) |
 | UI type | native Electron | native | Java Swing | .NET WinForms | terminal / Web | browser |
 | Zero-config CA / MITM | ✅ auto-trusted | ✅ | ⚠️ manual | ⚠️ | ⚠️ CLI | ⚠️ |
 | System-proxy auto toggle | ✅ on startup, restored on quit | ✅ | ✅ | ⚠️ | ❌ | ❌ |
@@ -125,7 +125,7 @@ Legend: ✅ supported · ⚠️ partial / paid · ❌ none
 | **AI-agent autonomous ops** | ✅ SKILL.md | ❌ | ❌ | ❌ | ⚠️ | ❌ |
 | Menu-bar Tray | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Standalone windows (no modals) | ✅ settings / editor / diff | ⚠️ | ❌ | ❌ | ❌ | ❌ |
-| Unit + e2e coverage | ✅ 20+ unit · 5 integration · 50+ e2e | 🚫 closed | 🚫 | 🚫 | ✅ OSS | ✅ OSS |
+| Unit + e2e coverage | ✅ 16+ unit · 6 integration · 55+ e2e | 🚫 closed | 🚫 | 🚫 | ✅ OSS | ✅ OSS |
 
 ---
 
@@ -187,6 +187,7 @@ Legend: ✅ supported · ⚠️ partial / paid · ❌ none
   - `script://` (custom JS)
   - `breakpoint://`
 - Rules editor (Monaco + syntax highlight + example insertion)
+- **Sidebar quick rules** (right-click host/URL prefix): one-click `abort` / CORS / `mapLocal` / `mapRemote` / `mock` / `statusCode` / `resDelay` / `resBody`. Auto-written to a dedicated "Temporary" sub-tab, each toggleable independently, one-click clear-all.
 - Multi rule-set CRUD + disk persistence (`userData/rules/*.rules`)
 - Plugins: `whistle-rules` / `mock` / `logger` / `breakpoint` / `allow-block` / `ssl-list` / `scripts`
 
@@ -216,7 +217,8 @@ Legend: ✅ supported · ⚠️ partial / paid · ❌ none
 
 ### Platform
 - macOS (universal, Apple Silicon + Intel)
-- Windows / Linux on the roadmap
+- Windows (NSIS installer + zip)
+- Linux (AppImage + deb)
 
 ---
 
@@ -319,12 +321,15 @@ Run `proxybaby --help` for the full manual.
 
 ## Quick start
 
-macOS required. **Install the app and you're done — no extra setup**:
+Supports **macOS / Windows / Linux**. Install the app and you're done:
 
-- **Grab the DMG** (recommended): download the latest `.dmg` from [Releases](https://github.com/imcuttle/proxybaby/releases), drag into `/Applications`, open it.
+- **Download** (recommended): grab the installer for your platform from [Releases](https://github.com/imcuttle/proxybaby/releases)
+  - macOS: `.dmg` or `.zip` (Intel + Apple Silicon)
+  - Windows: `.exe` (NSIS installer) or `.zip`
+  - Linux: `.AppImage` or `.deb`
 - On first launch the app will:
-  1. Prompt once for your admin password to trust the generated root CA (silent afterward).
-  2. Auto-install the `proxybaby` CLI wrapper to `/usr/local/bin/` (silent if writable; otherwise a "Install CLI with admin" button appears in Settings).
+  1. **macOS**: prompt once for your admin password to trust the generated root CA (silent afterward). Windows / Linux: follow the in-app guide to trust the CA in your OS store.
+  2. macOS auto-installs the `proxybaby` CLI wrapper to `/usr/local/bin/` (silent if writable; otherwise a "Install CLI with admin" button appears in Settings).
 - Then you can use `proxybaby status` / `proxybaby rule add ...` from any terminal.
 - Want your AI agent to use it too? Copy the [one-line prompt above](#-ai-friendly-full-cli--skill) into your assistant — it will fetch `skills/proxybaby/SKILL.md` from GitHub.
 
@@ -379,7 +384,7 @@ Three test layers, all using proper frameworks (Vitest + Playwright):
 
 `_electron.launch` boots the packaged app; `PROXYBABY_E2E=1` opens the `__pbE2E.emit` injection channel, feeds synthesized flows into the real UI, then asserts UI behavior.
 
-- `app.e2e.ts` (40+ cases): main window / injected flows / SSE tab / WebSocket / OpenAI streaming → chat bubbles / sidebar grouping / rules CRUD / plugin toggles / status bar / JSON Tree Raw / cURL copy / listener popover / capture↔rules switching / text/type/app/subpath/pin/save filters / Form/Hex/Image bodies / code-gen per language / filter presets / Allow/Block/SSL windows / scripts editor / network conditions / upstream / Composer / Diff / custom preview tabs / system-proxy-overridden warning
+- `app.e2e.ts` (50+ cases): main window / injected flows / SSE tab / WebSocket / OpenAI streaming → chat bubbles / sidebar grouping / sidebar right-click (SSL list / quick rules / custom-rule jump to Rules) / rules CRUD + Temporary sub-tab / plugin toggles / status bar / JSON Tree Raw / cURL copy / listener popover / capture↔rules switching / text/type/app/subpath/pin/save filters / Form/Hex/Image bodies / code-gen per language / filter presets / Allow/Block/SSL windows / scripts editor / network conditions / upstream / Composer / Diff / custom preview tabs / system-proxy-overridden warning
 - `ai-chat.e2e.ts`: AI sidebar visibility / create/switch/delete sessions / mention chips / streaming text-deltas / images / attachments / overflow dropdown / sidebar collapse
 - `screenshots.e2e.ts`: auto-generates README screenshots
 
@@ -457,33 +462,33 @@ See [`CODEBUDDY.md`](./CODEBUDDY.md) for more.
 
 ## Release process
 
-Uses [changesets](https://github.com/changesets/changesets) + GitHub Actions.
+Uses `scripts/release.mjs` + GitHub Actions.
 **A release is only published when you explicitly run `npm run release` locally** — pushing to `main` does NOT auto-publish.
 
 ```bash
-# 1. Write a changeset for your change (asks major/minor/patch + description)
-npx changeset
+# One-shot (AI-assisted: analyses commits, decides bump, drafts changelog):
+npm run release --                                           # or: node scripts/release.mjs
+node scripts/release.mjs --type minor --notes /path/notes.md # explicit bump + notes
 
-# 2. Push the changeset file to main
-git add .changeset && git commit -m "docs: changeset for xxx" && git push
-
-# 3. When you're ready to ship (you can batch multiple changesets)
-npm run release
-#    ↑ locally: apply changesets → bump package.json → update CHANGELOG.md
-#              → commit → push main → tag vX.Y.Z → push tag
-#    Once the tag hits GitHub, Actions builds dmg/zip and creates the Release.
+# The script will:
+# 1. Preflight (clean tree, on main, in sync with origin)
+# 2. Bump package.json version
+# 3. Prepend the changelog section to CHANGELOG.md
+# 4. commit "chore: release vX.Y.Z" → push main → tag vX.Y.Z → push tag
+# Once the tag hits GitHub, Actions builds all three platforms and creates a GitHub Release.
 ```
+
+You can also use the `/release` skill (in codebuddy / Claude Code / Cursor) — it analyses `git log`, picks the semver bump automatically, and drafts the changelog for you.
 
 Two workflows:
 
 - `.github/workflows/ci.yml` — runs typecheck + unit + integration on every push/PR
-- `.github/workflows/release.yml` — only triggered by a `v*` tag or manual `workflow_dispatch`; builds unsigned DMG/zip on `macos-latest` and calls `gh release create`
+- `.github/workflows/release.yml` — only triggered by a `v*` tag or manual `workflow_dispatch`; three-platform matrix (macos-latest / windows-latest / ubuntu-latest) builds dmg+zip / exe+zip / AppImage+deb respectively, then `gh release create` publishes the combined release
 
 ---
 
 ## Roadmap
 
-- Windows / Linux
 - iOS / Android device cert installer
 - Deeper WebSocket beautification (protocol detection, Protobuf decoding)
 - More AI protocols (Google Gemini, Cohere, Mistral, OpenRouter…)

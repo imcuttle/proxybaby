@@ -85,7 +85,7 @@
 | 功能 | **ProxyBaby** | Proxyman | Charles | Fiddler Classic | mitmproxy | whistle |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | 价格 / License | 🆓 MIT 免费 | 💰 PRO 付费 | 💰 30 天试用 | 🆓 (Win) | 🆓 开源 | 🆓 开源 |
-| 平台 | macOS | mac / Win / Linux | 全平台 | Windows | 全平台 (CLI) | 全平台 (Web) |
+| 平台 | mac / Win / Linux | mac / Win / Linux | 全平台 | Windows | 全平台 (CLI) | 全平台 (Web) |
 | UI 类型 | 原生 Electron | 原生 | Java Swing | .NET WinForms | 终端 / Web | 浏览器 |
 | 零配置装 CA / MITM | ✅ 自动装信任 | ✅ | ⚠️ 手动 | ⚠️ | ⚠️ CLI | ⚠️ |
 | 系统代理自动开关 | ✅ 启动即开、退出还原 | ✅ | ✅ | ⚠️ | ❌ | ❌ |
@@ -125,7 +125,7 @@
 | **AI Agent 可自主操作** | ✅ SKILL.md | ❌ | ❌ | ❌ | ⚠️ | ❌ |
 | Menu-bar Tray | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 独立窗体（不用 modal） | ✅ 设置/编辑器/Diff | ⚠️ | ❌ | ❌ | ❌ | ❌ |
-| 单测 + e2e 覆盖 | ✅ 20+ 单元 · 5 集成 · 50+ e2e | 🚫 闭源 | 🚫 | 🚫 | ✅ 开源 | ✅ 开源 |
+| 单测 + e2e 覆盖 | ✅ 16+ 单元 · 6 集成 · 55+ e2e | 🚫 闭源 | 🚫 | 🚫 | ✅ 开源 | ✅ 开源 |
 
 ---
 
@@ -140,7 +140,7 @@
 
 **AI 会话美化**（核心差异）：OpenAI `chat/completions` · Anthropic `v1/messages`（`tool_use`/`thinking`） · ACP · 角色分色气泡 · 工具调用可视化 · 打字机式流式渲染 · 内嵌 AI 侧边栏（跑 `codebuddy --acp`）
 
-**规则改写**：洋葱式中间件（`respond` 短路 / `abort` 中断） · 100% whistle 兼容 · 18+ 操作符：`statusCode` `redirect` `abort` `reqHeaders` `resHeaders` `reqBody` `resBody` `host` `file` `mock` `reqDelay` `resDelay` `log` `ua` `referer` `script` `breakpoint` · 多规则集 · 插件系统（whistle-rules / mock / logger / breakpoint / allow-block / ssl-list / scripts）
+**规则改写**：洋葱式中间件（`respond` 短路 / `abort` 中断） · 100% whistle 兼容 · 18+ 操作符：`statusCode` `redirect` `abort` `reqHeaders` `resHeaders` `reqBody` `resBody` `host` `file` `mock` `reqDelay` `resDelay` `log` `ua` `referer` `script` `breakpoint` · 多规则集 · **侧栏右键快速规则**（一键 abort/CORS/mapLocal/mapRemote/mock/statusCode/resDelay/resBody，自动写入独立"临时规则"sub-tab，单条可开关、可清空） · 插件系统（whistle-rules / mock / logger / breakpoint / allow-block / ssl-list / scripts）
 
 **断点**：请求/响应双阶段暂停编辑 · 断点条件匹配
 
@@ -148,7 +148,7 @@
 
 **集成**：CLI 覆盖 app 全部能力 · AI Skill · 本地控制通道（`127.0.0.1:8898`） · Menu-bar Tray
 
-**平台**：macOS（universal）· Windows/Linux 在 Roadmap
+**平台**：macOS（Intel + Apple Silicon）· Windows · Linux 三平台产物由 GitHub Actions 自动打包
 
 </details>
 
@@ -322,12 +322,15 @@ proxybaby plugin disable <id>
 
 ## 快速开始
 
-需要 macOS。**装完 app 就即用，无需额外操作**：
+支持 **macOS / Windows / Linux**。装完 app 即用：
 
-- **下载 DMG**（推荐）：到 [Releases](https://github.com/imcuttle/proxybaby/releases) 下载最新 `.dmg`，拖进 `/Applications`，双击打开
-- 首次启动会：
-  1. 弹一次管理员密码，把根 CA 装进系统钥匙串（之后启动无提示）
-  2. 自动把 `proxybaby` CLI 装到 `/usr/local/bin/`（用户可写就静默完成；如果不可写会在设置里显示"用管理员权限安装 CLI"按钮）
+- **下载**（推荐）：到 [Releases](https://github.com/imcuttle/proxybaby/releases) 下载对应平台安装包
+  - macOS：`.dmg` 或 `.zip`（Intel / Apple Silicon 都支持）
+  - Windows：`.exe`（NSIS 安装器）或 `.zip`
+  - Linux：`.AppImage` 或 `.deb`
+- **首次启动**会：
+  1. **macOS**：弹一次管理员密码把根 CA 装进系统钥匙串（之后启动无提示）；Windows / Linux 请按 app 里的引导装入系统信任存储
+  2. macOS 会自动把 `proxybaby` CLI 装到 `/usr/local/bin/`（用户可写就静默完成；不可写会在设置里显示"用管理员权限安装 CLI"按钮）
 - 之后你在任意终端里都能：`proxybaby status` / `proxybaby rule add ...`
 - 想让 AI 也会用？把 [README 上面那段 prompt](#-面向-ai-的完整-cli--skill) 丢给你的 agent，它会自动从 GitHub 拉 `skills/proxybaby/SKILL.md` 到本地
 
@@ -382,7 +385,7 @@ npm run install:mac
 
 `_electron.launch` 起打包后的 app，`PROXYBABY_E2E=1` 打开 `__pbE2E.emit` 注入通道，向真实 UI 灌合成 flow 后断言 UI 行为。
 
-- `app.e2e.ts`（40+ case）：主界面 / 注入普通请求 / SSE Tab / WebSocket 双向 / OpenAI 流式 → chat 气泡 / 侧栏分组 / 规则页 CRUD / 插件开关 / 状态栏 / JSON Tree Raw / cURL 复制 / 监听地址 popover / 抓包↔规则来回切换 / 文本 类型 应用 subpath pin save 过滤 / 正文 Form Hex Image / 代码生成多语言 / 高级过滤器预设 / Allow Block SSL 配置窗口 / 脚本编辑窗口 / 网络条件切换 / 上游代理 / Composer / 多选 Diff / 自定义预览 Tab / 系统代理被覆盖告警
+- `app.e2e.ts`（50+ case）：主界面 / 注入普通请求 / SSE Tab / WebSocket 双向 / OpenAI 流式 → chat 气泡 / 侧栏分组 / 侧栏右键（SSL 列表 / 快速规则 / 自定义规则跳规则页） / 规则页 CRUD + 临时 sub-tab / 插件开关 / 状态栏 / JSON Tree Raw / cURL 复制 / 监听地址 popover / 抓包↔规则来回切换 / 文本 类型 应用 subpath pin save 过滤 / 正文 Form Hex Image / 代码生成多语言 / 高级过滤器预设 / Allow Block SSL 配置窗口 / 脚本编辑窗口 / 网络条件切换 / 上游代理 / Composer / 多选 Diff / 自定义预览 Tab / 系统代理被覆盖告警
 - `ai-chat.e2e.ts`：AI 侧边栏可见性 / 新建 切换 删除会话 / mention chip 渲染 / 多段 text-delta 流式累加 / 图片渲染 / 附件流 / 会话溢出下拉 / 左侧栏收起
 - `screenshots.e2e.ts`：README 用的宣传截图自动生成
 
@@ -460,33 +463,32 @@ npm run install:mac      # build:dir → 覆盖安装到 /Applications
 
 ## 发版流程 / Release
 
-用 [changesets](https://github.com/changesets/changesets) + GitHub Actions。
-**只有你在本地明确执行 `npm run release` 才会真的发布**，光 push 到 main 不会自动发。
+用 `scripts/release.mjs` + GitHub Actions。**只有本地明确执行 `npm run release` 才会真的发布**，光 push 到 main 不会自动发。
 
 ```bash
-# 1. 写这次改动的 changeset（会问你 major / minor / patch，写 changelog 描述）
-npx changeset
+# 一键（AI 自动分析 commits 决定 bump + 起草 changelog）：
+npm run release --                 # 或 node scripts/release.mjs
+node scripts/release.mjs --type minor --notes /path/to/notes.md   # 显式指定
 
-# 2. 提交 changeset 文件到 main
-git add .changeset && git commit -m "docs: changeset for xxx" && git push
-
-# 3. 想发版时（可以攒好几个 changeset 一起发）
-npm run release
-#    ↑ 本地做：apply changesets → bump package.json → 更新 CHANGELOG.md
-#              → commit → push main → tag vX.Y.Z → push tag
-#    tag 一到 GitHub，Actions 会自动打包 dmg/zip 并创建 GitHub Release
+# 脚本会：
+# 1. 前置检查（干净工作区、在 main、与 origin 同步）
+# 2. bump package.json version
+# 3. prepend changelog 到 CHANGELOG.md
+# 4. commit "chore: release vX.Y.Z" → push main → tag vX.Y.Z → push tag
+# tag 一到 GitHub，Actions 会自动打包三平台产物 + 建 GitHub Release
 ```
+
+也可以用 `/release` skill（在 codebuddy / Claude Code / Cursor 里），会自动分析 `git log` 决定 major / minor / patch 并起草 changelog。
 
 CI 上有两个 workflow：
 
 - `.github/workflows/ci.yml` — 每次 push/PR 跑 typecheck + unit + integration 测试
-- `.github/workflows/release.yml` — 收到 `v*` tag 或 `workflow_dispatch` 才跑；在 `macos-latest` 上打 unsigned DMG/zip 并 `gh release create`
+- `.github/workflows/release.yml` — 收到 `v*` tag 或 `workflow_dispatch` 才跑；三平台矩阵（macos-latest / windows-latest / ubuntu-latest）分别打包 dmg+zip / exe+zip / AppImage+deb，最终 `gh release create` 汇总
 
 ---
 
 ## Roadmap
 
-- Windows / Linux
 - iOS / Android 设备证书安装向导
 - WebSocket 消息深度美化（协议自动识别、Protobuf 反序列化）
 - 更多 AI 协议适配（Google Gemini、Cohere、Mistral、OpenRouter…）

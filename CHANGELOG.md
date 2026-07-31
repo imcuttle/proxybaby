@@ -1,5 +1,15 @@
 # proxybaby
 
+## 0.3.1
+
+### 修复
+
+- **置顶域名/应用后"已置顶"计数不变**：此前只统计 `pinnedIds`（单条 flow 置顶），忽略了 `pinnedHosts` / `pinnedPaths`。现在按 `isFlowPinned` 完整遍历。
+
+### 新特性
+
+- **收藏夹「已置顶」改为树状展开**：展开后按分组显示置顶的应用和域名，域名节点可再展开显示置顶的路径前缀。子节点点击切换 filter，右键取消置顶。
+
 ## 0.3.0
 
 ### 新特性
@@ -17,7 +27,7 @@
 - 新增 `tests/unit/record-filter.test.ts`（11 个用例覆盖 shouldRecord / shouldDecrypt / URL glob / disabled）。
 - 更新 e2e：`过滤配置窗口：录制过滤添加 App 维度条目`、`侧栏右键：将域名加入抓包排除/包含列表（record-filter）`。
 
-## 0.2.0
+## ## 0.2.0
 
 ### ✨ 新功能
 
@@ -31,7 +41,7 @@
 
 - chore(release): `/release` 命令全流程自动化，前置检查通过后无中间确认直接 bump + tag + push (`99611db`)
 
-## ## 0.1.0
+## ## ## 0.1.0
 
 首次发布 🎉
 

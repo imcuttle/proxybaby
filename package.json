@@ -1,7 +1,18 @@
 {
   "name": "proxybaby",
   "version": "0.1.0",
-  "description": "A macOS HTTP(S) traffic inspector with AI SSE beautification.",
+  "description": "Free & open-source HTTP(S) proxy debugger for macOS / Windows / Linux with a built-in AI/SSE beautifier.",
+  "author": {
+    "name": "imcuttle",
+    "email": "imcuttle@noreply.users.github.com",
+    "url": "https://github.com/imcuttle"
+  },
+  "homepage": "https://github.com/imcuttle/proxybaby",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imcuttle/proxybaby.git"
+  },
+  "license": "MIT",
   "main": "dist-electron/main.js",
   "type": "module",
   "bin": {

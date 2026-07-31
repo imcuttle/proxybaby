@@ -392,6 +392,52 @@ test('侧栏右键：将域名加入 SSL 排除列表（不抓包解密）', asy
   expect(cfg.entries.some((e: any) => e.kind === 'host' && e.value === 'api.demo.com')).toBe(true);
 });
 
+test('侧栏右键：快速规则 → 禁止访问，生成临时规则', async () => {
+  await resetFilters();
+  // 清空临时规则
+  await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
+  await hostRow.click({ button: 'right' });
+  await page.getByText('快速规则').click();
+  await page.locator('[data-testid="quick-rule-abort"]').click();
+  const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
+  const temps = list.filter((s: any) => s.temporary);
+  expect(temps.length).toBeGreaterThanOrEqual(1);
+  expect(temps.some((s: any) => s.text.includes('api.demo.com') && s.text.includes('abort'))).toBe(true);
+});
+
+test('侧栏右键：自定义规则 → 跳规则页 + 临时 sub-tab 出现，编辑器聚焦', async () => {
+  await resetFilters();
+  await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
+  await hostRow.click({ button: 'right' });
+  await page.getByText('快速规则').click();
+  await page.locator('[data-testid="quick-rule-custom"]').click();
+  // 应切到规则页
+  await expect(page.locator('[data-testid="rules-mode-tabs"]')).toBeVisible();
+  // 临时 sub-tab 出现
+  await expect(page.locator('[data-testid="rules-subtab-temporary"]')).toBeVisible();
+  const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
+  const custom = list.find((s: any) => s.temporary && s.name === '[临时] 自定义');
+  expect(custom).toBeTruthy();
+  expect(custom.text.includes('api.demo.com')).toBe(true);
+});
+
+test('规则页临时 sub-tab: 清空按钮工作', async () => {
+  // 先保证有临时规则
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.rulesQuickAdd({ pattern: 'demo.com', operator: 'abort', value: '' });
+  });
+  await page.getByRole('button', { name: '规则', exact: true }).click();
+  await expect(page.locator('[data-testid="rules-subtab-temporary"]')).toBeVisible();
+  await page.locator('[data-testid="rules-subtab-temporary"]').click();
+  // 点清空（会弹 confirm，playwright 需要 accept 一次）
+  page.once('dialog', (d) => d.accept());
+  await page.locator('[data-testid="rules-clear-temp"]').click();
+  // 临时 tab 应消失
+  await expect(page.locator('[data-testid="rules-subtab-temporary"]')).toHaveCount(0, { timeout: 3000 });
+});
+
 test('侧栏选中项 hover 时保持蓝色底（不被 hover 灰色覆盖）', async () => {
   await resetFilters();
   const hostRow = page.getByText('api.demo.com', { exact: true }).first();

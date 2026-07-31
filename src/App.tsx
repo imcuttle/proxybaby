@@ -286,6 +286,16 @@ function MainWindow() {
 
   const [tab, setTab] = useState<'flows' | 'rules' | 'composer'>('flows');
 
+  // 订阅 "nav:goto" 事件：Sidebar 右键"自定义规则"等场景需要切页
+  useEffect(() => {
+    const off = window.proxybaby.onEvent('nav:goto' as any, (p: any) => {
+      if (p?.page === 'rules') setTab('rules');
+      else if (p?.page === 'flows') setTab('flows');
+      else if (p?.page === 'composer') setTab('composer');
+    });
+    return () => off();
+  }, []);
+
   const flows = useFlowStore((s) => s.flows);
   const byId = useFlowStore((s) => s.byId);
   const selectedIds = useFlowStore((s) => s.selectedIds);

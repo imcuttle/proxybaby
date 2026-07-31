@@ -468,7 +468,11 @@ function setupIpc() {
 
   // 取消/启用系统代理
   ipcMain.handle('proxy:set-system', async (_e, on: boolean) => {
-    if (on) {
+    if (E2E) {
+      // E2E 模式下不真的操作 networksetup（避免污染宿主机的系统代理）；
+      // 只更新内存里的 proxyStatus 并广播，供渲染层断言。
+      proxyStatus.systemProxyApplied = on;
+    } else if (on) {
       const svcs = await applySystemProxy(PROXY_HOST, PROXY_PORT);
       proxyStatus.systemProxyApplied = svcs.length > 0;
     } else {

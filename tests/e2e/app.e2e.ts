@@ -168,6 +168,42 @@ test('插件列表可见并可切换', async () => {
   await expect(page.getByText('Breakpoint').first()).toBeVisible();
 });
 
+test('flow:app-info 事件可后补 app 元数据', async () => {
+  await page.getByRole('button', { name: '抓包' }).click();
+  // 注入一个不带 app 的 flow
+  await injectFlow(
+    {
+      id: 'f-lateapp', status: 'pending', isTLS: true, sseFrames: [],
+      app: undefined,
+      request: { method: 'GET', url: 'https://late.example.com/x', host: 'late.example.com', path: '/x', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: Date.now(), contentType: '' },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-lateapp', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: false, contentType: 'text/plain' } } },
+      { event: 'flow:end', payload: { id: 'f-lateapp', durationMs: 5, status: 'completed' } },
+    ],
+  );
+  const row = page.locator('[data-testid="flow-row"][data-flow-id="f-lateapp"]');
+  await expect(row).toBeVisible();
+  // 初始还没 app —— 通过 store 直接断言（比 UI 更稳）
+  const initialApp = await page.evaluate(() => {
+    const s = (window as any).__pbStore?.getState?.();
+    return s?.byId?.['f-lateapp']?.app || null;
+  });
+  expect(initialApp).toBeNull();
+
+  // 补 app-info
+  await page.evaluate(async () => {
+    await (window as any).__pbE2E.emit('flow:app-info', {
+      id: 'f-lateapp',
+      app: { name: 'LateApp', pid: 999 },
+    });
+  });
+  await page.waitForFunction(() => {
+    const s = (window as any).__pbStore?.getState?.();
+    return s?.byId?.['f-lateapp']?.app?.name === 'LateApp';
+  }, null, { timeout: 3000 });
+});
+
 test('回到抓包页，状态栏显示请求数', async () => {
   await page.getByRole('button', { name: '抓包' }).click();
   await ensureBaseFlows();
@@ -729,54 +765,38 @@ test('系统代理被覆盖：override 清空后按钮消失', async () => {
 
 // ============ 新特性：快捷键 ⌥⌘O 切换系统代理 / ⌥⌘R 切换抓包 ============
 
-test('快捷键 ⌥⌘O 触发 setSystemProxy IPC；⌥⌘R 触发 toggleRecording', async () => {
-  // 注入 spy：替换 window.proxybaby.setSystemProxy / toggleRecording 记录调用，避免真的动系统代理。
-  await page.evaluate(() => {
-    const w = window as any;
-    w.__pbSpy = { sysCalls: [] as boolean[], recCalls: [] as boolean[] };
-    const orig = w.proxybaby;
-    w.__pbOrigProxybaby = {
-      setSystemProxy: orig.setSystemProxy,
-      toggleRecording: orig.toggleRecording,
-    };
-    orig.setSystemProxy = async (on: boolean) => {
-      w.__pbSpy.sysCalls.push(on);
-      // 返回一个合成 status，让 store 更新，便于断言
-      return { running: true, host: '127.0.0.1', port: 9998, systemProxyApplied: on, recording: true };
-    };
-    orig.toggleRecording = async (on: boolean) => {
-      w.__pbSpy.recCalls.push(on);
-      return { running: true, host: '127.0.0.1', port: 9998, systemProxyApplied: false, recording: on };
-    };
-  });
-
-  // 确保 store 里 proxyStatus 有值 —— 主进程启动时会广播一次，等它到达
+test('快捷键 ⌥⌘O 切换系统代理；⌥⌘R 切换抓包录制', async () => {
+  // 拿到当前 proxyStatus 作为基线
   await page.waitForFunction(() => !!(window as any).__pbStore?.getState?.().proxyStatus, null, { timeout: 5000 });
-  // 设一个已知初值：系统代理关，抓包中
-  await page.evaluate(() => {
-    (window as any).__pbStore.getState().setProxyStatus({
-      running: true, host: '127.0.0.1', port: 9998, systemProxyApplied: false, recording: true,
-    });
-  });
+  const before = await page.evaluate(() => (window as any).__pbStore.getState().proxyStatus);
+  expect(before).toBeTruthy();
 
-  // 触发 ⌥⌘O：系统代理应被开
+  // ⌥⌘O：切换 systemProxyApplied（E2E 模式下 main 会跳过真实 networksetup，仅更新内存状态）
+  const targetSys = !before.systemProxyApplied;
   await page.keyboard.press('Meta+Alt+o');
-  await expect.poll(() => page.evaluate(() => (window as any).__pbSpy.sysCalls.length)).toBe(1);
-  expect(await page.evaluate(() => (window as any).__pbSpy.sysCalls[0])).toBe(true);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__pbStore.getState().proxyStatus.systemProxyApplied))
+    .toBe(targetSys);
+  // 状态栏图标应同步（data-system 属性反映）
+  await expect(page.getByTestId('proxy-status-btn')).toHaveAttribute('data-system', targetSys ? 'true' : 'false');
 
-  // 再触发一次 ⌥⌘O：应被关
+  // 再按一次 ⌥⌘O：切回原值
   await page.keyboard.press('Meta+Alt+o');
-  await expect.poll(() => page.evaluate(() => (window as any).__pbSpy.sysCalls.length)).toBe(2);
-  expect(await page.evaluate(() => (window as any).__pbSpy.sysCalls[1])).toBe(false);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__pbStore.getState().proxyStatus.systemProxyApplied))
+    .toBe(before.systemProxyApplied);
 
-  // 触发 ⌥⌘R：抓包应被暂停（当前 recording=true → 传 false）
+  // ⌥⌘R：切换 recording
+  const beforeRec = (await page.evaluate(() => (window as any).__pbStore.getState().proxyStatus.recording)) as boolean;
   await page.keyboard.press('Meta+Alt+r');
-  await expect.poll(() => page.evaluate(() => (window as any).__pbSpy.recCalls.length)).toBe(1);
-  expect(await page.evaluate(() => (window as any).__pbSpy.recCalls[0])).toBe(false);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__pbStore.getState().proxyStatus.recording))
+    .toBe(!beforeRec);
+  await expect(page.getByTestId('proxy-status-btn')).toHaveAttribute('data-recording', !beforeRec ? 'true' : 'false');
 
-  // 还原 spy，避免影响后续测试
-  await page.evaluate(() => {
-    const w = window as any;
-    Object.assign(w.proxybaby, w.__pbOrigProxybaby);
-  });
+  // 复原 recording 为原值，避免影响后续测试
+  await page.keyboard.press('Meta+Alt+r');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__pbStore.getState().proxyStatus.recording))
+    .toBe(beforeRec);
 });

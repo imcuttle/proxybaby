@@ -20,6 +20,8 @@ export function StatusBar() {
   const flows = useFlowStore((s) => s.flows);
   const filter = useFlowStore((s) => s.filter);
   const pinnedIds = useFlowStore((s) => s.pinnedIds);
+  const pinnedHosts = useFlowStore((s) => s.pinnedHosts);
+  const pinnedPaths = useFlowStore((s) => s.pinnedPaths);
   const savedIds = useFlowStore((s) => s.savedIds);
   const selectedId = useFlowStore((s) => s.selectedId);
   const traffic = useFlowStore((s) => s.traffic);
@@ -109,8 +111,8 @@ export function StatusBar() {
   };
 
   const filtered = useMemo(
-    () => flows.filter((f) => matchFilter(f, filter, { pinnedIds, savedIds })),
-    [flows, filter, pinnedIds, savedIds],
+    () => flows.filter((f) => matchFilter(f, filter, { pinnedIds, savedIds, pinnedHosts, pinnedPaths })),
+    [flows, filter, pinnedIds, savedIds, pinnedHosts, pinnedPaths],
   );
   const selectedCount = selectedId && filtered.some((f) => f.id === selectedId) ? 1 : 0;
 

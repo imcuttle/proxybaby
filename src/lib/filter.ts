@@ -4,9 +4,14 @@ import type { FilterState, SearchScope, SearchMode, AdvancedFilter, AdvancedRule
 export function matchFilter(
   flow: Flow,
   filter: FilterState,
-  sets?: { pinnedIds?: Record<string, true>; savedIds?: Record<string, true> },
+  sets?: {
+    pinnedIds?: Record<string, true>;
+    savedIds?: Record<string, true>;
+    pinnedHosts?: Record<string, true>;
+    pinnedPaths?: Record<string, true>;
+  },
 ): boolean {
-  if (filter.special === 'pinned' && !sets?.pinnedIds?.[flow.id]) return false;
+  if (filter.special === 'pinned' && !isFlowPinned(flow, sets)) return false;
   if (filter.special === 'saved' && !sets?.savedIds?.[flow.id]) return false;
   if (filter.appName) {
     const name = flow.app?.name;
@@ -202,4 +207,28 @@ export function methodColor(method: string): string {
 export function isFlowActive(flow: Flow): boolean {
   if (flow.status === 'completed' || flow.status === 'error') return false;
   return true;
+}
+
+/**
+ * flow 是否被置顶：直接命中 pinnedIds、或其 host 在 pinnedHosts、或其 host+path 前缀命中 pinnedPaths。
+ */
+export function isFlowPinned(
+  flow: Flow,
+  sets?: {
+    pinnedIds?: Record<string, true>;
+    pinnedHosts?: Record<string, true>;
+    pinnedPaths?: Record<string, true>;
+  },
+): boolean {
+  if (!sets) return false;
+  if (sets.pinnedIds?.[flow.id]) return true;
+  const host = flow.request.host;
+  if (host && sets.pinnedHosts?.[host]) return true;
+  if (sets.pinnedPaths) {
+    const hp = `${host}${flow.request.path}`;
+    for (const prefix of Object.keys(sets.pinnedPaths)) {
+      if (hp.startsWith(prefix)) return true;
+    }
+  }
+  return false;
 }

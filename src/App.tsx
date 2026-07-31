@@ -271,7 +271,7 @@ function MainWindow() {
   // 快捷键：⌘F 切搜索栏；⌘↑↓ 跳命中
   const navigateHit = (dir: 'next' | 'prev') => {
     const s = useFlowStore.getState();
-    const filtered = s.flows.filter((f) => matchFilter(f, s.filter, { pinnedIds: s.pinnedIds, savedIds: s.savedIds }));
+    const filtered = s.flows.filter((f) => matchFilter(f, s.filter, { pinnedIds: s.pinnedIds, savedIds: s.savedIds, pinnedHosts: s.pinnedHosts, pinnedPaths: s.pinnedPaths }));
     if (!filtered.length) return;
     const curIdx = filtered.findIndex((f) => f.id === s.selectedId);
     const nextIdx = curIdx < 0

@@ -2,7 +2,7 @@ import { useMemo, useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Lock, LockOpen, Pin, Bookmark, MoreHorizontal, Pencil, ArrowUp, ArrowDown } from 'lucide-react';
 import { useFlowStore, type SortKey, type SortState } from '../store/flows';
-import { matchFilter, methodColor, statusColor, isFlowActive } from '../lib/filter';
+import { matchFilter, methodColor, statusColor, isFlowActive, isFlowPinned } from '../lib/filter';
 import { formatSize, formatTime, formatDuration } from '../lib/format';
 import { cn } from '../lib/cn';
 import type { Flow } from '../../shared/types';
@@ -64,6 +64,8 @@ export function RequestList() {
   const toggleSelected = useFlowStore((s) => s.toggleSelected);
   const rangeSelect = useFlowStore((s) => s.rangeSelect);
   const pinnedIds = useFlowStore((s) => s.pinnedIds);
+  const pinnedHosts = useFlowStore((s) => s.pinnedHosts);
+  const pinnedPaths = useFlowStore((s) => s.pinnedPaths);
   const savedIds = useFlowStore((s) => s.savedIds);
   const togglePin = useFlowStore((s) => s.togglePin);
   const toggleSave = useFlowStore((s) => s.toggleSave);
@@ -76,21 +78,37 @@ export function RequestList() {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(
-    () => flows.filter((f) => matchFilter(f, filter, { pinnedIds, savedIds })),
-    [flows, filter, pinnedIds, savedIds],
+    () => flows.filter((f) => matchFilter(f, filter, { pinnedIds, savedIds, pinnedHosts, pinnedPaths })),
+    [flows, filter, pinnedIds, savedIds, pinnedHosts, pinnedPaths],
   );
 
   const sorted = useMemo(() => {
-    if (!sort) return filtered;
-    if (sort.key === 'index') {
-      // "index" 语义：按抓包顺序（filtered 的原顺序），仅方向切换
-      return sort.dir === 'asc' ? filtered : [...filtered].reverse();
+    // 先按 sort 决策基础顺序
+    let base: typeof filtered;
+    if (!sort) {
+      base = filtered;
+    } else if (sort.key === 'index') {
+      base = sort.dir === 'asc' ? filtered : [...filtered].reverse();
+    } else {
+      const arr = [...filtered];
+      arr.sort((a, b) => compareFlows(a, b, sort.key));
+      if (sort.dir === 'desc') arr.reverse();
+      base = arr;
     }
-    const arr = [...filtered];
-    arr.sort((a, b) => compareFlows(a, b, sort.key));
-    if (sort.dir === 'desc') arr.reverse();
-    return arr;
-  }, [filtered, sort]);
+    // 再把 pinned（含 host/path 命中）稳定提到最前
+    const hasAnyPin =
+      Object.keys(pinnedIds).length +
+        Object.keys(pinnedHosts).length +
+        Object.keys(pinnedPaths).length > 0;
+    if (!hasAnyPin) return base;
+    const pinnedRows: typeof base = [];
+    const rest: typeof base = [];
+    for (const f of base) {
+      if (isFlowPinned(f, { pinnedIds, pinnedHosts, pinnedPaths })) pinnedRows.push(f);
+      else rest.push(f);
+    }
+    return pinnedRows.concat(rest);
+  }, [filtered, sort, pinnedIds, pinnedHosts, pinnedPaths]);
 
   const orderedIds = useMemo(() => sorted.map((f) => f.id), [sorted]);
 
@@ -138,7 +156,7 @@ export function RequestList() {
                 index={v.index}
                 selected={isSelected}
                 primary={isPrimary}
-                pinned={!!pinnedIds[flow.id]}
+                pinned={isFlowPinned(flow, { pinnedIds, pinnedHosts, pinnedPaths })}
                 saved={!!savedIds[flow.id]}
                 note={noteById[flow.id]}
                 highlight={highlightById[flow.id] || flow.highlight}

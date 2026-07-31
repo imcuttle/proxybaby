@@ -73,11 +73,13 @@ export function SearchBar({ onNavigate }: { onNavigate?: (dir: 'next' | 'prev') 
   const setSearchOpen = useFlowStore((s) => s.setSearchOpen);
   const flows = useFlowStore((s) => s.flows);
   const pinnedIds = useFlowStore((s) => s.pinnedIds);
+  const pinnedHosts = useFlowStore((s) => s.pinnedHosts);
+  const pinnedPaths = useFlowStore((s) => s.pinnedPaths);
   const savedIds = useFlowStore((s) => s.savedIds);
 
   // 当前过滤下的命中数：决定"上一条 / 下一条"按钮是否可点
   const hitCount = useMemo(
-    () => flows.reduce((acc, f) => acc + (matchFilter(f, filter, { pinnedIds, savedIds }) ? 1 : 0), 0),
+    () => flows.reduce((acc, f) => acc + (matchFilter(f, filter, { pinnedIds, savedIds, pinnedHosts, pinnedPaths }) ? 1 : 0), 0),
     [flows, filter, pinnedIds, savedIds],
   );
   const canNavigate = hitCount > 0;

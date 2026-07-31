@@ -86,6 +86,10 @@ interface FlowState {
   selectedIds: Record<string, true>;            // 多选集合（含主选）
   filter: FilterState;
   pinnedIds: Record<string, true>;
+  /** 按 host 置顶：该 host 的所有 flow 在列表里排到前面（持久化） */
+  pinnedHosts: Record<string, true>;
+  /** 按 URL 前缀置顶：命中前缀的所有 flow 在列表里排到前面（持久化） */
+  pinnedPaths: Record<string, true>;
   savedIds: Record<string, true>;
   noteById: Record<string, string>;
   highlightById: Record<string, string>;      // color: 'red' | 'orange' | 'yellow' | 'green' | 'blue'
@@ -114,6 +118,8 @@ interface FlowState {
   setFilter(patch: Partial<FilterState>): void;
   resetFilter(): void;
   togglePin(id: string): void;
+  togglePinHost(host: string): void;
+  togglePinPath(prefix: string): void;
   toggleSave(id: string): void;
   setNote(id: string, note: string): void;
   setHighlight(id: string, color: string | null): void;
@@ -159,6 +165,8 @@ const DEFAULT_FILTER: FilterState = {
 const LS_KEY_SORT = 'proxybaby:list-sort';
 const LS_KEY_COL_WIDTHS = 'proxybaby:list-col-widths';
 const LS_KEY_CUSTOM_TABS = 'proxybaby:custom-tabs';
+const LS_KEY_PINNED_HOSTS = 'proxybaby:pinned-hosts';
+const LS_KEY_PINNED_PATHS = 'proxybaby:pinned-paths';
 const ALL_FORMATS: PreviewFormat[] = [
   'json', 'json-tree', 'form', 'multipart', 'html', 'html-webview',
   'css', 'js', 'xml', 'image', 'hex', 'graphql', 'text',
@@ -224,6 +232,27 @@ function persistCustomTabs(next: CustomTabsPref) {
   try { localStorage.setItem(LS_KEY_CUSTOM_TABS, JSON.stringify(next)); } catch {}
 }
 
+/**
+ * 持久化的"置顶集合"：host 名 / URL 前缀。
+ * 命中即置顶，跨启动保留。数据规模极小（几十条），直接存 localStorage。
+ */
+function loadStringSet(key: string): Record<string, true> {
+  try {
+    const v = localStorage.getItem(key);
+    if (!v) return {};
+    const parsed = JSON.parse(v);
+    if (!Array.isArray(parsed)) return {};
+    const out: Record<string, true> = {};
+    for (const x of parsed) if (typeof x === 'string' && x) out[x] = true;
+    return out;
+  } catch {
+    return {};
+  }
+}
+function persistStringSet(key: string, set: Record<string, true>) {
+  try { localStorage.setItem(key, JSON.stringify(Object.keys(set))); } catch {}
+}
+
 export const useFlowStore = create<FlowState>((set, get) => ({
   flows: [],
   byId: {},
@@ -231,6 +260,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   selectedIds: {},
   filter: { ...DEFAULT_FILTER },
   pinnedIds: {},
+  pinnedHosts: loadStringSet(LS_KEY_PINNED_HOSTS),
+  pinnedPaths: loadStringSet(LS_KEY_PINNED_PATHS),
   savedIds: {},
   noteById: {},
   highlightById: {},
@@ -290,6 +321,18 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const next = { ...s.pinnedIds };
     if (next[id]) delete next[id]; else next[id] = true;
     return { pinnedIds: next };
+  }),
+  togglePinHost: (host) => set((s) => {
+    const next = { ...s.pinnedHosts };
+    if (next[host]) delete next[host]; else next[host] = true;
+    persistStringSet(LS_KEY_PINNED_HOSTS, next);
+    return { pinnedHosts: next };
+  }),
+  togglePinPath: (prefix) => set((s) => {
+    const next = { ...s.pinnedPaths };
+    if (next[prefix]) delete next[prefix]; else next[prefix] = true;
+    persistStringSet(LS_KEY_PINNED_PATHS, next);
+    return { pinnedPaths: next };
   }),
   toggleSave: (id) => set((s) => {
     const next = { ...s.savedIds };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchFilter } from '../../src/lib/filter';
+import { matchFilter, isFlowPinned } from '../../src/lib/filter';
 import { mkFlow, mkReq } from '../fixtures';
 
 const base = (over = {}) => mkFlow({ request: mkReq({ url: 'https://api.demo.com/v2/users?q=1', host: 'api.demo.com', path: '/v2/users?q=1', ...over }) });
@@ -33,6 +33,27 @@ describe('matchFilter', () => {
     const f = mkFlow({ id: 'p1' });
     expect(matchFilter(f, { text: '', type: 'all', special: 'pinned' }, { pinnedIds: { p1: true } })).toBe(true);
     expect(matchFilter(f, { text: '', type: 'all', special: 'pinned' }, { pinnedIds: {} })).toBe(false);
+  });
+
+  it('special=pinned 也会匹配 host 被置顶的 flow', () => {
+    const f = base();
+    expect(matchFilter(f, { text: '', type: 'all', special: 'pinned' }, { pinnedHosts: { 'api.demo.com': true } })).toBe(true);
+    expect(matchFilter(f, { text: '', type: 'all', special: 'pinned' }, { pinnedHosts: { 'other.com': true } })).toBe(false);
+  });
+
+  it('special=pinned 也会匹配 URL 前缀被置顶的 flow', () => {
+    const f = base();
+    expect(matchFilter(f, { text: '', type: 'all', special: 'pinned' }, { pinnedPaths: { 'api.demo.com/v2': true } })).toBe(true);
+    expect(matchFilter(f, { text: '', type: 'all', special: 'pinned' }, { pinnedPaths: { 'api.demo.com/v9': true } })).toBe(false);
+  });
+
+  it('isFlowPinned 综合判定：id / host / path 任一命中即置顶', () => {
+    const f = mkFlow({ id: 'x1', request: mkReq({ host: 'api.demo.com', path: '/v2/users' }) });
+    expect(isFlowPinned(f)).toBe(false);
+    expect(isFlowPinned(f, { pinnedIds: { x1: true } })).toBe(true);
+    expect(isFlowPinned(f, { pinnedHosts: { 'api.demo.com': true } })).toBe(true);
+    expect(isFlowPinned(f, { pinnedPaths: { 'api.demo.com/v2': true } })).toBe(true);
+    expect(isFlowPinned(f, { pinnedHosts: { 'other.com': true } })).toBe(false);
   });
 
   it('special=saved 只匹配已保存', () => {

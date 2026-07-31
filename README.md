@@ -439,6 +439,32 @@ npm run install:mac      # build:dir → 覆盖安装到 /Applications
 
 ---
 
+## 发版流程 / Release
+
+用 [changesets](https://github.com/changesets/changesets) + GitHub Actions。
+**只有你在本地明确执行 `npm run release` 才会真的发布**，光 push 到 main 不会自动发。
+
+```bash
+# 1. 写这次改动的 changeset（会问你 major / minor / patch，写 changelog 描述）
+npx changeset
+
+# 2. 提交 changeset 文件到 main
+git add .changeset && git commit -m "docs: changeset for xxx" && git push
+
+# 3. 想发版时（可以攒好几个 changeset 一起发）
+npm run release
+#    ↑ 本地做：apply changesets → bump package.json → 更新 CHANGELOG.md
+#              → commit → push main → tag vX.Y.Z → push tag
+#    tag 一到 GitHub，Actions 会自动打包 dmg/zip 并创建 GitHub Release
+```
+
+CI 上有两个 workflow：
+
+- `.github/workflows/ci.yml` — 每次 push/PR 跑 typecheck + unit + integration 测试
+- `.github/workflows/release.yml` — 收到 `v*` tag 或 `workflow_dispatch` 才跑；在 `macos-latest` 上打 unsigned DMG/zip 并 `gh release create`
+
+---
+
 ## Roadmap
 
 - Windows / Linux

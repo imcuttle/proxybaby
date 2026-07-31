@@ -439,6 +439,32 @@ See [`CODEBUDDY.md`](./CODEBUDDY.md) for more.
 
 ---
 
+## Release process
+
+Uses [changesets](https://github.com/changesets/changesets) + GitHub Actions.
+**A release is only published when you explicitly run `npm run release` locally** — pushing to `main` does NOT auto-publish.
+
+```bash
+# 1. Write a changeset for your change (asks major/minor/patch + description)
+npx changeset
+
+# 2. Push the changeset file to main
+git add .changeset && git commit -m "docs: changeset for xxx" && git push
+
+# 3. When you're ready to ship (you can batch multiple changesets)
+npm run release
+#    ↑ locally: apply changesets → bump package.json → update CHANGELOG.md
+#              → commit → push main → tag vX.Y.Z → push tag
+#    Once the tag hits GitHub, Actions builds dmg/zip and creates the Release.
+```
+
+Two workflows:
+
+- `.github/workflows/ci.yml` — runs typecheck + unit + integration on every push/PR
+- `.github/workflows/release.yml` — only triggered by a `v*` tag or manual `workflow_dispatch`; builds unsigned DMG/zip on `macos-latest` and calls `gh release create`
+
+---
+
 ## Roadmap
 
 - Windows / Linux

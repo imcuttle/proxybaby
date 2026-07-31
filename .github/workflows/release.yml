@@ -1,0 +1,95 @@
+# Release workflow
+#
+# 触发条件（只有明确执行才会发布）：
+#   1) 从本地跑 `npm run release`（会 apply changeset、commit、push tag `v*`），tag 到达触发这里
+#   2) 或在 GitHub UI 里手动 workflow_dispatch，输入 version（例：0.2.0）
+#
+# 做什么：
+#   - macos-latest 上 vite build + electron-builder（unsigned，供社区下载）
+#   - 从 CHANGELOG.md 抽出对应版本的 section 作为 release notes
+#   - 上传 dmg / zip / 校验文件到 GitHub Release
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (without leading v), e.g. 0.2.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER="${{ github.event.inputs.version }}"
+          else
+            VER="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER"    >> "$GITHUB_OUTPUT"
+          echo "Releasing $VER"
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck + unit tests
+        run: |
+          npm run typecheck
+          npm run test:unit
+
+      - name: Build renderer
+        run: npx vite build
+
+      - name: Build electron app (dmg + zip, unsigned)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac dmg zip -c.mac.identity=null --publish never
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          node scripts/extract-changelog.mjs "${{ steps.ver.outputs.version }}" > /tmp/notes.md || echo "See CHANGELOG.md" > /tmp/notes.md
+          echo "path=/tmp/notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          # 如果 tag 是被本次 workflow_dispatch 触发的，需要先建 tag
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          # 收集产物
+          ASSETS=$(ls release/*.dmg release/*.zip release/*.blockmap release/latest-mac.yml 2>/dev/null || true)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — uploading assets"
+            gh release upload "$TAG" $ASSETS --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/notes.md \
+              $ASSETS
+          fi

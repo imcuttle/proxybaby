@@ -1,0 +1,19 @@
+# proxybaby
+
+## 0.1.0
+
+首次发布 🎉
+
+- **抓包引擎**：Electron 主进程 MITM 代理，全 HTTPS 解密、HTTP/2、WebSocket、SSE 帧实时解析；`CONNECT` 隧道 + 动态叶子证书 + gzip/br/deflate 异步解压
+- **系统集成**：自动生成并信任根 CA、`networksetup` 系统代理开关（退出还原）、`lsof` 按发起进程识别应用名、菜单栏 Tray
+- **UI**：三栏布局 + TanStack Virtual 虚拟列表 + JSON Tree / Hex / Form / Multipart / GraphQL / Image 多格式正文视图 + Monaco headers/body 编辑器 + 高级过滤器 + Pin/Save + 独立设置窗口
+- **AI 会话美化**（业界独家）：OpenAI `chat/completions`、Anthropic `v1/messages`（含 `tool_use` / `thinking`）、ACP 三大 AI 协议原生美化，打字机式流式渲染
+- **内嵌 AI 侧边栏**：直接在抓包窗口跑 `codebuddy --acp` agent，Slate.js 编辑器 + `kind:id` mention 语法
+- **whistle 兼容规则**：18+ 操作符（`statusCode` / `redirect` / `reqHeaders` / `resHeaders` / `reqBody` / `resBody` / `host` / `file` / `mock` / `reqDelay` / `resDelay` / `log` / `ua` / `referer` / `script` / `breakpoint`），多规则集磁盘持久化
+- **插件系统**：`whistle-rules` / `mock` / `logger` / `breakpoint` / `allow-block` / `ssl-list` / `scripts` 内置插件，可按需启停
+- **断点调试**：请求/响应双阶段暂停、UI 里改 headers/body 后放行
+- **生产力**：Diff 对比 / Composer 手动发请求 / 10+ 语言代码生成 / 自定义预览 Tab / HAR 与 `.proxybaby` 导入导出
+- **AI-friendly CLI**：`proxybaby` CLI 覆盖 app 全部运行时能力（状态/代理/记录/会话导出/规则 CRUD/插件开关），并配套 `skills/proxybaby/SKILL.md`，让 codebuddy / Claude Code / Cursor 等 agent 一键操作
+- **测试覆盖**：16 unit + 5 integration（起真实端口）+ 50+ e2e（Playwright + Electron）
+
+平台：macOS（universal，Apple Silicon + Intel），未签名版本，首次打开需在系统设置里允许。

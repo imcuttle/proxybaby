@@ -412,6 +412,7 @@ test('侧栏右键：置顶此域名 → 出现在收藏夹已置顶分组', asy
   await page.evaluate(() => {
     localStorage.removeItem('proxybaby:pinned-hosts');
     localStorage.removeItem('proxybaby:pinned-paths');
+    (window as any).__pbStore?.setState({ pinnedHosts: {}, pinnedPaths: {}, pinnedIds: {} });
   });
   const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
   await expect(hostRow).toBeVisible();
@@ -423,6 +424,12 @@ test('侧栏右键：置顶此域名 → 出现在收藏夹已置顶分组', asy
     return v ? JSON.parse(v) : [];
   });
   expect(pinned).toContain('api.demo.com');
+  // 侧栏"已置顶"计数应该 > 0（api.demo.com 下至少有 1 条 flow）
+  const pinnedHeader = page.locator('[data-testid="pinned-tree-header"]');
+  await expect(pinnedHeader).toContainText(/[1-9]/);
+  // tree 展开后应该看到 host 子节点
+  const hostChild = page.locator('[data-testid="pinned-host-row"][data-host="api.demo.com"]');
+  await expect(hostChild).toBeVisible();
 });
 
 test('侧栏右键：快速规则 → 禁止访问，生成临时规则', async () => {

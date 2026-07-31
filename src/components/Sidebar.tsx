@@ -4,6 +4,7 @@ import * as ContextMenu from '@radix-ui/react-context-menu';
 import { ChevronDown, ChevronRight, Globe, Package, Pin, Bookmark, PanelLeftClose } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { cn } from '../lib/cn';
+import { isFlowPinned } from '../lib/filter';
 import type { FilterKind, FilterEntry, RuleQuickInputParams } from '../../shared/types';
 
 export function Sidebar() {
@@ -90,8 +91,42 @@ export function Sidebar() {
     });
   }, [hosts, subpaths, q]);
 
-  const pinCount = Object.keys(pinnedIds).length;
+  const pinCount = useMemo(
+    () => flows.reduce((n, f) => n + (isFlowPinned(f, { pinnedIds, pinnedHosts, pinnedPaths }) ? 1 : 0), 0),
+    [flows, pinnedIds, pinnedHosts, pinnedPaths],
+  );
   const saveCount = Object.keys(savedIds).length;
+
+  // 已置顶 tree：apps / hosts（下含 pinnedPaths）。
+  // - pinnedApps: 键为 app 名
+  // - pinnedHosts: 键为 host 字符串
+  // - pinnedPaths: 键为 `${host}${path前缀}`，例如 "api.demo.com/v1"
+  const pinnedTree = useMemo(() => {
+    const appList = Object.keys(pinnedApps).map((name) => {
+      const meta = apps.find(([n]) => n === name)?.[1];
+      return { name, count: meta?.count ?? 0, iconDataUrl: meta?.iconDataUrl };
+    });
+    const hostList = Object.keys(pinnedHosts).map((host) => {
+      const paths = Object.keys(pinnedPaths)
+        .filter((p) => p.startsWith(host + '/'))
+        .map((full) => ({ full, seg: full.slice(host.length) }));
+      return { host, count: hosts.find(([h]) => h === host)?.[1] ?? 0, paths };
+    });
+    // orphan pinned paths（其 host 没被置顶）
+    const orphanPaths = Object.keys(pinnedPaths)
+      .filter((p) => {
+        const slash = p.indexOf('/');
+        const host = slash > 0 ? p.slice(0, slash) : p;
+        return !pinnedHosts[host];
+      })
+      .map((full) => {
+        const slash = full.indexOf('/');
+        const host = slash > 0 ? full.slice(0, slash) : full;
+        const seg = slash > 0 ? full.slice(slash) : '/';
+        return { full, host, seg };
+      });
+    return { appList, hostList, orphanPaths };
+  }, [pinnedApps, pinnedHosts, pinnedPaths, apps, hosts]);
 
   const deleteAppFlows = async (name: string, ids: string[]) => {
     for (const id of ids) removeFlow(id);
@@ -248,13 +283,15 @@ export function Sidebar() {
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto pb-scroll">
         <Section title="收藏夹" defaultOpen>
-          <Item
-            icon={<Pin size={12} />}
-            label="已置顶"
-            count={pinCount}
+          <PinnedTree
+            pinCount={pinCount}
+            tree={pinnedTree}
             active={filter.special === 'pinned'}
-            onClick={() => setFilter({ special: filter.special === 'pinned' ? undefined : 'pinned', host: undefined, appName: undefined, pathPrefix: undefined })}
-            query={q}
+            filter={filter}
+            setFilter={setFilter}
+            onTogglePinApp={togglePinApp}
+            onTogglePinHost={togglePinHost}
+            onTogglePinPath={togglePinPath}
           />
           <Item
             icon={<Bookmark size={12} />}
@@ -734,6 +771,217 @@ function QuickRuleSubMenu({
         </ContextMenu.SubContent>
       </ContextMenu.Portal>
     </ContextMenu.Sub>
+  );
+}
+
+function PinnedTree({
+  pinCount,
+  tree,
+  active,
+  filter,
+  setFilter,
+  onTogglePinApp,
+  onTogglePinHost,
+  onTogglePinPath,
+}: {
+  pinCount: number;
+  tree: {
+    appList: { name: string; count: number; iconDataUrl?: string }[];
+    hostList: { host: string; count: number; paths: { full: string; seg: string }[] }[];
+    orphanPaths: { full: string; host: string; seg: string }[];
+  };
+  active: boolean;
+  filter: { special?: 'pinned' | 'saved'; host?: string; appName?: string; pathPrefix?: string };
+  setFilter: (patch: Partial<{ special?: 'pinned' | 'saved'; host?: string; appName?: string; pathPrefix?: string }>) => void;
+  onTogglePinApp: (name: string) => void;
+  onTogglePinHost: (host: string) => void;
+  onTogglePinPath: (prefix: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const empty = tree.appList.length === 0 && tree.hostList.length === 0 && tree.orphanPaths.length === 0;
+  const [openHost, setOpenHost] = useState<Record<string, boolean>>({});
+
+  return (
+    <Collapsible.Root open={open} onOpenChange={setOpen}>
+      <div
+        data-testid="pinned-tree-header"
+        className={cn(
+          'w-full flex items-center gap-1 px-1 py-1 text-sm cursor-default select-none',
+          active ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+        )}
+      >
+        <Collapsible.Trigger asChild>
+          <button
+            className={cn('p-0.5 rounded', active ? 'text-white' : 'text-pb-muted')}
+            disabled={empty}
+            data-testid="pinned-tree-toggle"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {empty ? <span className="inline-block w-3" /> : open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+        </Collapsible.Trigger>
+        <div
+          className="flex-1 flex items-center gap-1.5"
+          onClick={() =>
+            setFilter({
+              special: filter.special === 'pinned' ? undefined : 'pinned',
+              host: undefined,
+              appName: undefined,
+              pathPrefix: undefined,
+            })
+          }
+        >
+          <Pin size={12} className={active ? 'text-white' : 'text-pb-muted'} />
+          <span className="flex-1 truncate text-left">已置顶</span>
+          <span className={cn('text-xs', active ? 'text-white/80' : 'text-pb-muted')}>{pinCount}</span>
+        </div>
+      </div>
+      <Collapsible.Content>
+        {tree.appList.map((a) => {
+          const isActive = filter.appName === a.name;
+          return (
+            <div
+              key={`app:${a.name}`}
+              data-testid={`pinned-app-row`}
+              data-app={a.name}
+              onClick={() =>
+                setFilter({
+                  appName: isActive ? undefined : a.name,
+                  host: undefined,
+                  pathPrefix: undefined,
+                  special: isActive ? undefined : filter.special,
+                })
+              }
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onTogglePinApp(a.name);
+              }}
+              className={cn(
+                'w-full flex items-center gap-1.5 pl-8 pr-2 py-1 text-sm cursor-default select-none',
+                isActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+              )}
+              title="右键取消置顶"
+            >
+              {a.iconDataUrl ? (
+                <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
+              ) : (
+                <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
+              )}
+              <span className="flex-1 truncate text-left">{a.name}</span>
+              <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
+            </div>
+          );
+        })}
+        {tree.hostList.map((h) => {
+          const isActive = filter.host === h.host && !filter.pathPrefix;
+          const hostOpen = openHost[h.host] ?? true;
+          const hasPaths = h.paths.length > 0;
+          return (
+            <div key={`host:${h.host}`}>
+              <div
+                data-testid="pinned-host-row"
+                data-host={h.host}
+                className={cn(
+                  'w-full flex items-center gap-1 pl-6 pr-2 py-1 text-sm cursor-default select-none',
+                  isActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+                )}
+              >
+                <button
+                  className={cn('p-0.5 rounded', isActive ? 'text-white' : 'text-pb-muted')}
+                  disabled={!hasPaths}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenHost((s) => ({ ...s, [h.host]: !hostOpen }));
+                  }}
+                >
+                  {!hasPaths ? <span className="inline-block w-3" /> : hostOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                </button>
+                <div
+                  className="flex-1 flex items-center gap-1.5 min-w-0"
+                  onClick={() =>
+                    setFilter({
+                      host: isActive ? undefined : h.host,
+                      pathPrefix: undefined,
+                      appName: undefined,
+                      special: isActive ? undefined : filter.special,
+                    })
+                  }
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    onTogglePinHost(h.host);
+                  }}
+                  title="右键取消置顶"
+                >
+                  <Globe size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
+                  <span className="flex-1 truncate text-left">{h.host}</span>
+                  <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{h.count}</span>
+                </div>
+              </div>
+              {hostOpen &&
+                h.paths.map((p) => {
+                  const pActive = filter.pathPrefix === p.full;
+                  return (
+                    <div
+                      key={`path:${p.full}`}
+                      data-testid="pinned-path-row"
+                      data-prefix={p.full}
+                      onClick={() =>
+                        setFilter({
+                          pathPrefix: pActive ? undefined : p.full,
+                          host: pActive ? undefined : h.host,
+                          appName: undefined,
+                          special: pActive ? undefined : filter.special,
+                        })
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        onTogglePinPath(p.full);
+                      }}
+                      className={cn(
+                        'w-full flex items-center gap-1.5 pl-14 pr-2 py-1 text-xs cursor-default select-none',
+                        pActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+                      )}
+                      title="右键取消置顶"
+                    >
+                      <span className="flex-1 truncate text-left font-mono">{p.seg}</span>
+                    </div>
+                  );
+                })}
+            </div>
+          );
+        })}
+        {tree.orphanPaths.map((p) => {
+          const pActive = filter.pathPrefix === p.full;
+          return (
+            <div
+              key={`orphan-path:${p.full}`}
+              data-testid="pinned-path-row"
+              data-prefix={p.full}
+              onClick={() =>
+                setFilter({
+                  pathPrefix: pActive ? undefined : p.full,
+                  host: pActive ? undefined : p.host,
+                  appName: undefined,
+                  special: pActive ? undefined : filter.special,
+                })
+              }
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onTogglePinPath(p.full);
+              }}
+              className={cn(
+                'w-full flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs cursor-default select-none',
+                pActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+              )}
+              title="右键取消置顶"
+            >
+              <Globe size={10} className={pActive ? 'text-white' : 'text-pb-muted'} />
+              <span className="flex-1 truncate text-left font-mono">{p.host}{p.seg}</span>
+            </div>
+          );
+        })}
+      </Collapsible.Content>
+    </Collapsible.Root>
   );
 }
 

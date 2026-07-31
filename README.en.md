@@ -1,12 +1,22 @@
 <div align="center">
 
+<img src="assets/icon-rounded.png" alt="ProxyBaby" width="200" height="200" />
+
 # 🍼 ProxyBaby
 
-**Free & open-source HTTP(S) proxy debugger for macOS — with a built-in AI / SSE beautifier.**
+**Free & open-source HTTP(S) proxy debugger for macOS / Windows / Linux — with a built-in AI / SSE beautifier.**
 
 Zero-config, works out of the box, **every feature free**. On par with Proxyman PRO / Charles / Fiddler / whistle, plus a category-defining **AI conversation viewer** (OpenAI / Anthropic / ACP).
 
-**中文文档 → [README.md](./README.md)**
+[![Release](https://img.shields.io/github/v/release/imcuttle/proxybaby?color=%23ff6b9d&label=Download&logo=github&style=for-the-badge)](https://github.com/imcuttle/proxybaby/releases/latest)
+[![License](https://img.shields.io/github/license/imcuttle/proxybaby?style=for-the-badge)](./LICENSE)
+[![Stars](https://img.shields.io/github/stars/imcuttle/proxybaby?style=for-the-badge)](https://github.com/imcuttle/proxybaby/stargazers)
+
+### 📥 [Download latest](https://github.com/imcuttle/proxybaby/releases/latest) · [中文](./README.md) · [English](./README.en.md)
+
+<sub>macOS `.dmg` / `.zip`  ·  Windows `.exe` / `.zip`  ·  Linux `.AppImage` / `.deb`</sub>
+
+<br/>
 
 ![main](docs/screenshots/01-main.png)
 

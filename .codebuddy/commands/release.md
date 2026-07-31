@@ -1,135 +1,209 @@
-# /release — 一键发包
+# /release — 一键发包（AI 自动分析 commit）
 
-一键为 ProxyBaby 发新版：写 changeset → apply → commit → tag → push → GitHub Actions 打包发布。
+一键为 ProxyBaby 发新版：**AI 分析 `git log` 自动决定版本号 + 起草 changelog** → commit → tag → push → GitHub Actions 打包发布。
 
 **这是一次真正的发布动作，会 push 到 origin/main 和创建 tag，触发 CI 打包 DMG/zip 并创建 GitHub Release。执行前必须与用户确认。**
 
 ## 命令参数
 
 ```bash
-/release                          # 交互式：会问 major/minor/patch + 说明
-/release patch "修复 xxx bug"     # 直接指定
-/release minor "新增 xxx 功能"
-/release major "重大不兼容变更"
+/release                          # 全自动：AI 分析 commit 决定 bump + 起草 changelog，用户确认后发布
+/release patch                    # 强制 patch，AI 只负责起草 changelog
+/release minor
+/release major
+/release "自定义 changelog 描述"    # 用户直接给 changelog，AI 只判断 bump
+/release patch "自定义描述"        # 全部指定
 ```
+
+**关键设计**：不用手写 changeset，一切基于 commit history。
 
 ## 执行步骤（严格按顺序）
 
-按下面顺序做，每一步失败就停下来问用户：
-
-### 0. 前置检查（**必做**）
+### 0. 前置检查
 
 ```bash
-# 1) 工作区必须干净
-git status --porcelain
-#    → 有输出？先提示用户 commit / stash，中止发版
-
-# 2) 必须在 main 分支且与 origin/main 同步
-git rev-parse --abbrev-ref HEAD           # 应该是 main
+git status --porcelain            # 必须空
+git rev-parse --abbrev-ref HEAD   # 必须是 main
 git fetch origin main
-git rev-list --count HEAD..origin/main    # 应该是 0（本地不落后）
-git rev-list --count origin/main..HEAD    # 应该是 0（本地不领先）
-
-# 3) 拿到当前版本 + 显示上一版 changelog 头，供用户核对
-node -p "require('./package.json').version"
-head -20 CHANGELOG.md
+git rev-list --count HEAD..origin/main   # 必须 0（本地不落后 origin）
 ```
 
 任一失败 → 打印原因 + 中止。
 
-### 1. 与用户确认
-
-用 AskUserQuestion（或直接问，视上下文而定）：
-- **bump 类型**：patch / minor / major（除非命令参数已给）
-- **changelog 描述**：一句话/多行；如果用户没给，就基于最近的 `git log <prev-tag>..HEAD --oneline` 生成一份草稿让用户确认
-
-只有用户明确同意后再往下走。
-
-### 2. 生成 changeset
+### 1. 拿到上一个 release tag + 提取 commit range
 
 ```bash
-# 把描述写成 .changeset/<hash>.md
-cat > .changeset/$(date +%s)-release.md <<EOF
----
-"proxybaby": <BUMP_TYPE>
----
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+CURR_VERSION=$(node -p "require('./package.json').version")
 
-<用户给的 changelog 内容>
+# 提取自上次发版以来的所有 commits
+if [ -n "$LAST_TAG" ]; then
+  git log --no-merges --pretty=format:'%h|%s|%b---END---' "$LAST_TAG..HEAD"
+else
+  git log --no-merges --pretty=format:'%h|%s|%b---END---'
+fi
+```
+
+### 2. AI 分析 commits 决定 bump 类型
+
+**规则（Conventional Commits）**：
+
+| commit 前缀 | bump |
+|---|---|
+| `feat!:` / `fix!:` / body 含 `BREAKING CHANGE:` | **major** |
+| `feat:` / `feat(scope):` | **minor** |
+| `fix:` / `perf:` / `refactor:` | **patch** |
+| `chore:` / `docs:` / `test:` / `ci:` / `style:` | 通常不触发发版；如果只有这些，问用户"确定要发新版吗？" |
+
+如果 commit 不用 Conventional Commits：
+- 从 subject 里找关键词判断（"新增"/"支持" → feat；"修复"/"fix" → patch；"重构"/"废弃"/"不兼容" → 考虑 major）
+- 拿不准 → 保守选 patch
+
+**除非用户在参数里已经指定了 bump，否则做完分析后要向用户确认。**
+
+### 3. AI 起草 changelog
+
+把 commits 分类整理成 markdown。示例结构：
+
+```markdown
+### ✨ 新功能
+- feat(rules): 支持正则表达式 pattern (`abc123`)
+- feat(ui): 添加 Diff 视图右键菜单 (`def456`)
+
+### 🐛 修复
+- fix(proxy): SSE 帧跨 chunk 时丢帧 (`ghi789`)
+
+### 🔧 其他
+- refactor(engine): 抽取 middleware helper (`jkl012`)
+- chore: bump electron to 32.4 (`mno345`)
+```
+
+分类映射：
+- `feat` → ✨ 新功能
+- `fix` → 🐛 修复
+- `perf` → ⚡ 性能
+- `refactor` → ♻️ 重构
+- `docs` → 📝 文档
+- `test` → 🧪 测试
+- `ci` / `build` → 👷 CI/构建
+- 其他 → 🔧 其他
+
+**每条 commit 尾巴带 `(hash)` 让用户能查到。** commit message 中的 subject 如果太长（> 80 字）可以在 changelog 里精简。
+
+用户如果自己传了 changelog 描述，AI 就用他的，不要重写。
+
+### 4. 保存 changelog 草稿到临时文件 + 展示给用户
+
+```bash
+NOTES_FILE=$(mktemp -t proxybaby-notes-XXXX.md)
+cat > "$NOTES_FILE" <<'EOF'
+<刚才起草的内容>
 EOF
 ```
 
-### 3. 消费 changeset → 更新版本 + CHANGELOG
+展示给用户：
+```
+→ Bump: 0.1.0 → 0.1.1 (patch)
+→ Changelog:
+    <草稿>
+→ NOTES_FILE: /tmp/proxybaby-notes-xxxx.md
 
-```bash
-npx changeset version
+是否发布？可以让我：
+  ✅ 直接发（yes / y）
+  📝 让我编辑一下 changelog（说 "改一下: xxx"）
+  🔀 换 bump 类型（说 "改成 minor"）
+  ❌ 取消（no / n）
 ```
 
-这一步会：
-- 根据 `.changeset/*.md` 更新 `package.json` 的 `version`
-- 追加到 `CHANGELOG.md`
-- 删除已消费的 changeset 文件
+**必须等用户明确 yes 才继续**。用户如果说"改一下 X"，AI 就在 `$NOTES_FILE` 里编辑后重新展示。
 
-**立刻读一次新版本号并告知用户**：
-```bash
-NEW_VERSION=$(node -p "require('./package.json').version")
-echo "→ New version: v$NEW_VERSION"
-head -30 CHANGELOG.md
-```
-
-再问用户一次：**"确认发布 v$NEW_VERSION 吗？"** 用户说 yes 才继续。
-
-### 4. Commit + push main
+### 5. 一条命令完成 bump + commit + tag + push
 
 ```bash
-git add package.json CHANGELOG.md .changeset
-git commit -m "chore: release v$NEW_VERSION"
-git push origin HEAD
+node scripts/release.mjs --type <BUMP> --notes "$NOTES_FILE"
 ```
 
-### 5. 打 tag + push tag（**这一步真正触发发布**）
+这个脚本会：
+1. 再次确认 workspace 干净、在 main 分支
+2. bump `package.json` 的 version
+3. 把 changelog 段落 prepend 到 `CHANGELOG.md`
+4. `git commit -m "chore: release vX.Y.Z"`
+5. `git push origin main`
+6. `git tag vX.Y.Z && git push origin vX.Y.Z`
+7. 输出 CI 追踪命令
+
+先跑一次 `--dry` 让用户预览也可以：
+```bash
+node scripts/release.mjs --type patch --notes "$NOTES_FILE" --dry
+git diff package.json CHANGELOG.md    # 让用户看
+git checkout package.json CHANGELOG.md  # 回滚（如果用户不满意）
+```
+
+### 6. 跟踪 CI
 
 ```bash
-git tag "v$NEW_VERSION"
-git push origin "v$NEW_VERSION"
+sleep 6
+gh run list --repo imcuttle/proxybaby --limit 2 --json databaseId,name,status,conclusion,headBranch
+# 或
+gh run watch --repo imcuttle/proxybaby --exit-status
 ```
 
-告诉用户：GitHub Actions release workflow 已被触发，会：
-- 在 `macos-latest` 上跑 `npm ci` → typecheck → unit tests → `vite build` → `electron-builder --mac dmg zip`
-- 从 `CHANGELOG.md` 抽出 v$NEW_VERSION 段作为 release notes
-- `gh release create v$NEW_VERSION` 上传 dmg/zip/blockmap/latest-mac.yml
-
-### 6. 监控发布进度（可选）
-
-```bash
-sleep 5
-gh run list --repo imcuttle/proxybaby --limit 3 --json databaseId,name,event,status,conclusion,headBranch
-# 或直接跟着看：
-# gh run watch --exit-status
-```
-
-跑完后：
+CI 通过后：
 ```bash
 gh release view "v$NEW_VERSION" --repo imcuttle/proxybaby
 ```
-给用户 release 页面链接：`https://github.com/imcuttle/proxybaby/releases/tag/v$NEW_VERSION`
+给用户 release 链接：`https://github.com/imcuttle/proxybaby/releases/tag/v$NEW_VERSION`
+
+## 完整示例
+
+```
+用户: /release
+
+AI: 让我看看自上次 v0.1.0 以来有什么改动…
+
+    → 最近 8 个 commits:
+      abc1234 feat(rules): 支持正则 pattern
+      def5678 fix(sse): 帧跨 chunk 丢字节
+      ghi9012 refactor(engine): 抽 middleware helper
+      jkl3456 docs: 更新 README
+      ... (4 more)
+
+    → 我建议：0.1.0 → 0.2.0（minor：包含 feat）
+
+    → Changelog 草稿：
+      ### ✨ 新功能
+      - feat(rules): 支持正则表达式 pattern (`abc1234`)
+      ### 🐛 修复
+      - fix(sse): SSE 帧跨 chunk 时丢字节 (`def5678`)
+      ### ♻️ 重构
+      - refactor(engine): 抽取 middleware helper (`ghi9012`)
+      ### 📝 文档
+      - docs: 更新 README (`jkl3456`)
+
+    确认发 v0.2.0？
+
+用户: yes
+
+AI: [跑 node scripts/release.mjs --type minor --notes /tmp/xxx.md]
+    ✅ 已 push v0.2.0，CI 正在打包，5 分钟内会出现在 releases 页。
+```
 
 ## 回滚
 
-如果 CI 挂了/需要重发：
+CI 挂了 / 需要重发：
 
 ```bash
-# 删本地/远端 tag
 git tag -d v<VER>
 git push origin :refs/tags/v<VER>
-# 删 release（如果建过）
 gh release delete v<VER> --repo imcuttle/proxybaby --yes || true
-# 修完再重新 tag / push
-git tag v<VER> && git push origin v<VER>
+# 修好之后再重新
+git tag v<VER> && git push origin v<VER>   # 直接复用同一个 tag，不用改版本号
 ```
 
 ## 常见坑
 
-- **npm ci 报 lockfile 不同步**：先本地 `rm -rf node_modules package-lock.json && npm install`，把 lock 提交后再重打 tag
-- **electron-builder 需要 code sign**：workflow 已经用 `CSC_IDENTITY_AUTO_DISCOVERY=false` + `-c.mac.identity=null` 出未签名版本，用户首次打开时需要在系统设置里放行
-- **workflow 没被触发**：确认 tag 是 `v` 开头（`v0.2.0` 而不是 `0.2.0`）
-- **changeset 目录里有旧文件**：`npx changeset version` 会一起消费掉，如果只想发某一部分，先手动挪走无关的 `.changeset/*.md`
+- **npm 装依赖失败 (esbuild optional deps)**：CI 已用 `npm install --no-audit --no-fund` 兜底，不用 `npm ci`
+- **vite build OOM**：`NODE_OPTIONS='--max-old-space-size=8192'` 已在 workflow 里
+- **electron-builder 找不到签名证书**：workflow 已用 `-c.mac.identity=null` 出未签名版
+- **workflow 没触发**：确认 tag 是 `v` 开头
+- **AI 拿 conventional commits 拿不准 bump**：保守选 patch，让用户 override

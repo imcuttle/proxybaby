@@ -12,17 +12,29 @@ concurrency:
 
 jobs:
   test:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      # Note: 用 `npm install` 而不是 `npm ci`，因为 esbuild 0.28 有大量 optional 平台包
+      # Note: `npm install` 而不是 `npm ci`，因为 esbuild 0.28 有大量 optional 平台包
       # (@esbuild/netbsd-arm64 等) 是 host-cpu-only 装入 lock 的，`npm ci` 会误报
-      # "Missing X from lock file"。`--no-audit --no-fund` 让输出干净点。
+      # "Missing X from lock file"。
       - run: npm install --no-audit --no-fund
+        shell: bash
       - run: npm run typecheck
+        shell: bash
       - run: npm run test:unit
-      - run: npm run test:integration
+        shell: bash
+      # integration 依赖起真实端口，macOS/Ubuntu 都能跑；Windows 上端口分配有时会撞
+      # ClamAV/防火墙，先跳过。
+      - if: matrix.os != 'windows-latest'
+        run: npm run test:integration
+        shell: bash

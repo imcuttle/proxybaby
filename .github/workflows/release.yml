@@ -1,13 +1,15 @@
 # Release workflow
 #
 # 触发条件（只有明确执行才会发布）：
-#   1) 从本地跑 `npm run release`（会 apply changeset、commit、push tag `v*`），tag 到达触发这里
-#   2) 或在 GitHub UI 里手动 workflow_dispatch，输入 version（例：0.2.0）
+#   1) push tag `v*`（推荐路径，通常来自 /release slash command → scripts/release.mjs）
+#   2) 或 GitHub UI 里 workflow_dispatch 手动跑，输入 version（例：0.2.0）
 #
-# 做什么：
-#   - macos-latest 上 vite build + electron-builder（unsigned，供社区下载）
-#   - 从 CHANGELOG.md 抽出对应版本的 section 作为 release notes
-#   - 上传 dmg / zip / 校验文件到 GitHub Release
+# 三个平台并行打包，产物汇总到同一个 GitHub Release：
+#   - macOS  → arm64 + x64 dmg / zip / blockmap
+#   - Windows → x64 + arm64 nsis (.exe) / zip
+#   - Linux  → x64 + arm64 AppImage / deb
+#
+# 所有产物都是未签名版本（社区包免费下载）；用户第一次打开需要在系统设置里放行。
 name: Release
 
 on:
@@ -24,18 +26,83 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: macos-latest
-    timeout-minutes: 40
+  # 各平台并行构建，产物 upload 到临时 artifact
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            targets: '--mac dmg zip -c.mac.identity=null'
+            env: 'CSC_IDENTITY_AUTO_DISCOVERY=false'
+          - os: windows-latest
+            platform: win
+            targets: '--win nsis zip'
+            env: ''
+          - os: ubuntu-latest
+            platform: linux
+            targets: '--linux AppImage deb'
+            env: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+
+      - name: Install
+        # 用 npm install 而不是 npm ci —— esbuild 0.28+ 有大量按 CPU 存的 optional
+        # 平台包，npm ci 在非 host 平台上报 "Missing X from lock file"。
+        run: npm install --no-audit --no-fund
+        shell: bash
+
+      - name: Typecheck + unit tests
+        run: |
+          npm run typecheck
+          npm run test:unit
+        shell: bash
+
+      - name: Build renderer
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
+        run: npx vite build
+        shell: bash
+
+      - name: Build electron app (${{ matrix.platform }})
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ${{ matrix.env }} npx electron-builder ${{ matrix.targets }} --publish never
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxybaby-${{ matrix.platform }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # 汇总所有平台产物 → 创建 GitHub Release
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version
         id: ver
@@ -47,53 +114,48 @@ jobs:
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "tag=v$VER"    >> "$GITHUB_OUTPUT"
-          echo "Releasing $VER"
 
-      - name: Install
-        # See ci.yml for why `npm install` instead of `npm ci`.
-        run: npm install --no-audit --no-fund
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
 
-      - name: Typecheck + unit tests
+      - name: Flatten artifacts
         run: |
-          npm run typecheck
-          npm run test:unit
-
-      - name: Build renderer
-        env:
-          NODE_OPTIONS: '--max-old-space-size=8192'
-        run: npx vite build
-
-      - name: Build electron app (dmg + zip, unsigned)
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_OPTIONS: '--max-old-space-size=8192'
-        run: npx electron-builder --mac dmg zip -c.mac.identity=null --publish never
+          mkdir -p release-assets
+          find dist-artifacts -type f \( \
+            -name '*.dmg' -o \
+            -name '*.zip' -o \
+            -name '*.blockmap' -o \
+            -name '*.exe' -o \
+            -name '*.AppImage' -o \
+            -name '*.deb' -o \
+            -name 'latest*.yml' \
+          \) -exec cp -v {} release-assets/ \;
+          ls -la release-assets
 
       - name: Extract release notes from CHANGELOG.md
-        id: notes
         run: |
-          node scripts/extract-changelog.mjs "${{ steps.ver.outputs.version }}" > /tmp/notes.md || echo "See CHANGELOG.md" > /tmp/notes.md
-          echo "path=/tmp/notes.md" >> "$GITHUB_OUTPUT"
+          node scripts/extract-changelog.mjs "${{ steps.ver.outputs.version }}" > /tmp/notes.md \
+            || echo "Release v${{ steps.ver.outputs.version }}" > /tmp/notes.md
+          cat /tmp/notes.md
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
-          # 如果 tag 是被本次 workflow_dispatch 触发的，需要先建 tag
+          # 如果 tag 是 workflow_dispatch 触发的，需要先创建
           if ! git rev-parse "$TAG" >/dev/null 2>&1; then
             git tag "$TAG"
             git push origin "$TAG"
           fi
-          # 收集产物
-          ASSETS=$(ls release/*.dmg release/*.zip release/*.blockmap release/latest-mac.yml 2>/dev/null || true)
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists — uploading assets"
-            gh release upload "$TAG" $ASSETS --clobber
+            gh release upload "$TAG" release-assets/* --clobber
           else
             gh release create "$TAG" \
               --title "$TAG" \
               --notes-file /tmp/notes.md \
-              $ASSETS
+              release-assets/*
           fi

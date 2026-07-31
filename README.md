@@ -1,12 +1,22 @@
 <div align="center">
 
+<img src="assets/icon-rounded.png" alt="ProxyBaby" width="200" height="200" />
+
 # 🍼 ProxyBaby
 
-**macOS 上免费开源的 HTTP(S) 抓包调试工具，内置 AI / SSE 消息美化。**
+**macOS / Windows / Linux 上免费开源的 HTTP(S) 抓包调试工具，内置 AI / SSE 消息美化。**
 
 零配置、开箱即用、**全功能免费**。功能对标 Proxyman PRO / Charles / Fiddler / whistle，额外内置业界独家的 **AI 对话可视化**（OpenAI / Anthropic / ACP）。
 
-**Read in English → [README.en.md](./README.en.md)**
+[![Release](https://img.shields.io/github/v/release/imcuttle/proxybaby?color=%23ff6b9d&label=Download&logo=github&style=for-the-badge)](https://github.com/imcuttle/proxybaby/releases/latest)
+[![License](https://img.shields.io/github/license/imcuttle/proxybaby?style=for-the-badge)](./LICENSE)
+[![Stars](https://img.shields.io/github/stars/imcuttle/proxybaby?style=for-the-badge)](https://github.com/imcuttle/proxybaby/stargazers)
+
+### 📥 [下载最新版](https://github.com/imcuttle/proxybaby/releases/latest) · [中文](./README.md) · [English](./README.en.md)
+
+<sub>macOS `.dmg` / `.zip`  ·  Windows `.exe` / `.zip`  ·  Linux `.AppImage` / `.deb`</sub>
+
+<br/>
 
 ![main](docs/screenshots/01-main.png)
 
@@ -121,127 +131,130 @@
 
 ## 📋 完整功能清单
 
-### 抓包与解密
-- 自动生成根 CA (node-forge)、静默装入系统钥匙串并置为受信任
-- 动态签发叶子证书（按 SNI），带 LRU 缓存
-- 全 HTTPS MITM 解密（含 HTTP/2 over TLS）
-- `CONNECT` 隧道 + 内嵌 TLS server
-- `Upgrade` 升级到 WebSocket，抓取原始帧
-- SSE (`text/event-stream`) 增量帧解析（跨 chunk / 空行分隔 / event & id 字段）
-- WebSocket 帧解析（RFC6455：mask / 分片 / 控制帧）
-- gzip / brotli / deflate / chunked 自动解压（异步、不阻塞 event loop）
-- 系统代理自动开关（`networksetup`），退出还原
-- 外部把系统代理"抢走"时状态栏告警并一键切回
-- 按发起进程识别应用名（`lsof` 反查端口 → PID → app，带缓存）
-- 上游代理（Upstream proxy）配置
-- 网络条件模拟：3G / 4G / DSL / offline
-- Allow / Block 列表（host / glob / regex，可按 App 维度）
-- SSL 白名单（哪些域名走 MITM，哪些直通）
+<details>
+<summary>点开查看完整列表</summary>
 
-### 展示
-- 三栏布局：侧栏（收藏夹/应用/域名+subpath）+ 请求列表 + 详情面板
-- TanStack Virtual 虚拟滚动，几万条也不卡
-- 列表状态：`pending` / `streaming` / `completed` / `error`，颜色标识
-- 侧栏树状：按 App 分组、按 Host 分组（同 Host 展开可看 subpath）
-- Pin（置顶）+ Save（收藏），提供独立过滤视图
-- 高级过滤器：多条件 AND、保存/加载预设
-- 文本搜索、类型过滤条（HTTP/HTTPS/JSON/XML/JS/CSS/GraphQL/文档/媒体/WebSocket…）
-- 详情面板 Tabs：
-  - Request: 头部 / 查询 / 正文 / 授权 / 原始 / 摘要 / 代码
-  - Response: 头部 / 正文 / Set-Cookie / 原始 / SSE / OpenAI / Anthropic / ACP …
-- 正文视图：JSON Tree（可折叠、局部复制） / JSON Raw / Text / Hex / Form / Multipart / GraphQL / 图片 / 二进制下载
-- 大文本 LazyText 懒渲染
-- Monaco 编辑器渲染 headers/body（语法高亮）
-- 复制 cURL / 复制正文 / 下载正文
-- 状态栏：证书状态、监听地址 + 系统代理开关、请求数、选中行统计、总流量速率
+**抓包与解密**：零配置根 CA 自动装信任 · 动态叶子证书（SNI + LRU） · HTTPS/HTTP2 MITM · WebSocket 抓帧（RFC6455）· SSE 增量帧解析 · gzip/br/deflate 异步解压 · 系统代理自动开关（退出还原、被抢占时告警） · `lsof` 按进程识别应用名 · 上游代理 · 3G/4G/offline 网络限速 · Allow/Block/SSL 白名单
 
-### AI 会话美化（核心差异化）
-- **OpenAI** `/v1/chat/completions`：流式 delta 合并回 `messages`，支持 tool call / function call
-- **Anthropic** `/v1/messages`：`content_block_start` / `content_block_delta` 流式，支持 `text` / `tool_use` / `thinking` 块
-- **ACP (Agent Client Protocol)**：over WebSocket / SSE，兼容 codebuddy / cursor 等 agent
-- 角色分色气泡（system / user / assistant / tool）
-- 工具调用可视化（参数增量拼接、结果单独气泡）
-- Markdown / 代码块 / 图片渲染
-- 打字机式流式渲染（新帧到达 → 就地追加，不整体重渲染）
-- 内嵌 AI 侧边栏：直接在抓包窗口内跑 `codebuddy --acp` agent，Slate.js 编辑器 + `kind:id` mention 语法
+**UI**：三栏布局 + 虚拟滚动几万条不卡 · 侧栏按 App/Host+subpath 树状分组 · Pin/Save 独立视图 · 高级过滤器（多条件 AND + 预设） · 详情面板 JSON Tree/Hex/Form/Multipart/GraphQL/Image 多格式 · Monaco 编辑器 · 大文本懒渲染 · 复制 cURL
 
-### 请求 / 响应改写
-- 洋葱式中间件链：pre → upstream → post；`respond()` 短路做 mock、`abort()` 中断
-- 100% 兼容 [whistle](https://wproxy.org/whistle/) 规则语法，多规则集
-- 18+ 内置操作符：
-  - `statusCode://` / `redirect://` / `abort://`
-  - `reqHeaders://` / `resHeaders://` / `reqBody://` / `resBody://`
-  - `host://` / `file://` / `mock://` / `dust://`
-  - `reqDelay://` / `resDelay://`
-  - `log://` / `ua://` / `referer://`
-  - `script://`（自定义 JS 脚本）
-  - `breakpoint://`
-- 规则文本编辑器（Monaco + 语法高亮 + 示例点击插入）
-- 多规则集 CRUD + 磁盘持久化（`userData/rules/*.rules`）
-- 插件系统：内置 `whistle-rules` / `mock` / `logger` / `breakpoint` / `allow-block` / `ssl-list` / `scripts`
+**AI 会话美化**（核心差异）：OpenAI `chat/completions` · Anthropic `v1/messages`（`tool_use`/`thinking`） · ACP · 角色分色气泡 · 工具调用可视化 · 打字机式流式渲染 · 内嵌 AI 侧边栏（跑 `codebuddy --acp`）
 
-### 断点
-- 请求断点：暂停在 pre 阶段，UI 里改 method / URL / headers / body 后放行
-- 响应断点：暂停在 post 阶段，改 status / headers / body 后放行
-- 断点条件（host / URL 匹配）
+**规则改写**：洋葱式中间件（`respond` 短路 / `abort` 中断） · 100% whistle 兼容 · 18+ 操作符：`statusCode` `redirect` `abort` `reqHeaders` `resHeaders` `reqBody` `resBody` `host` `file` `mock` `reqDelay` `resDelay` `log` `ua` `referer` `script` `breakpoint` · 多规则集 · 插件系统（whistle-rules / mock / logger / breakpoint / allow-block / ssl-list / scripts）
 
-### 会话
-- 内存 FIFO 会话（可配上限）
-- 导出/导入 `.proxybaby`（原生格式）
-- 导出/导入标准 HAR
-- 会话页签切换
+**断点**：请求/响应双阶段暂停编辑 · 断点条件匹配
 
-### 生产力工具
-- **Composer**：手动构造 HTTP 请求发出去（method / URL / headers / body），支持"复制到 Composer"
-- **代码生成**：cURL / fetch / axios / Python `requests` / Python `httpx` / Go / Node http / Java OkHttp …
-- **Diff 对比**：多选两条 flow，右键打开对比窗口
-- **自定义预览 Tab**：用户配置额外的展示 Tab
-- 独立窗体：设置、编辑器、Diff 都是独立 BrowserWindow
+**生产力**：Composer 手动发请求 · 代码生成 10+ 语言 · Diff 对比 · 自定义预览 Tab · HAR 与 `.proxybaby` 会话导入导出 · 独立窗体（不用 modal）
 
-### 集成
-- **CLI (`proxybaby`)**：控制运行中的 app（记录开关 / 规则管理 / 插件开关 / 应用启停 / 会话导出）
-- **AI Skill (`skills/proxybaby/SKILL.md`)**：让 AI agent 通过 CLI 自主 mock、改写、劫持
-- **本地控制通道**：`127.0.0.1:8898`，token 存于 `~/.proxybaby/cli-token`
-- **Menu-bar Tray**：常驻菜单栏
+**集成**：CLI 覆盖 app 全部能力 · AI Skill · 本地控制通道（`127.0.0.1:8898`） · Menu-bar Tray
 
-### 平台
-- 目前 macOS（Apple Silicon + Intel 通用）
-- Windows / Linux 在 Roadmap
+**平台**：macOS（universal）· Windows/Linux 在 Roadmap
+
+</details>
 
 ---
 
-## 🤖 面向 AI 的完整 CLI + Skill
+## 🤖 AI Skill —— 让 AI 直接开抓包
 
-ProxyBaby 是**唯一为 AI agent 时代**设计的抓包工具。它的每一项 UI 能力都对应一条 CLI 命令，而 CLI 又配套了 [`SKILL.md`](skills/proxybaby/SKILL.md)，让 codebuddy / Claude Code / Cursor / Aider 等 agent **不用读源码就能自主操作**。
+这是 **ProxyBaby 与其他抓包工具最大的区别**。别的工具你要点几十下鼠标：开抓包 → 找规则页 → 新建规则集 → 输入模式 → 输入操作符 → 保存 → 启用。ProxyBaby 你只要**对 AI 说一句人话**：
 
-### 一句 prompt 让 AI 帮你装好 skill
+> "帮我 mock 掉 `api.example.com/user`，让它返回 `{id:1, name:'Alice'}`"
 
-复制下面这段话粘贴给你的 AI 助手（codebuddy / Claude Code / Cursor 等），它会自动帮你装好 ProxyBaby skill：
+AI 就会自动跑：`proxybaby rule add mock-user --text 'api.example.com/user mock://{"id":1,"name":"Alice"}'`
+
+### 🚀 一句话装好 Skill（复制给你的 AI 就行）
 
 ```
 请帮我安装 ProxyBaby 的 AI Skill：
-1. 从 https://github.com/imcuttle/proxybaby 的 skills/proxybaby/SKILL.md 读取内容
-2. 保存到我本地：
-   - 如果我用的是 codebuddy → ~/.codebuddy/skills/proxybaby/SKILL.md
-   - 如果我用的是 Claude Code → ~/.claude/skills/proxybaby/SKILL.md
-   - 如果我用的是 Cursor → 项目里的 .cursor/rules/proxybaby.mdc
-3. 确认 ProxyBaby app 已安装（如没有，提示我到 https://github.com/imcuttle/proxybaby 下载）
-4. 装完后跑一次 `proxybaby status` 验证 CLI 能连上 app
-5. 告诉我可以直接对你说"帮我 mock xxx 接口"了
+1. 从 https://raw.githubusercontent.com/imcuttle/proxybaby/main/skills/proxybaby/SKILL.md 拉取
+2. 存到本地：
+   - codebuddy → ~/.codebuddy/skills/proxybaby/SKILL.md
+   - Claude Code → ~/.claude/skills/proxybaby/SKILL.md
+   - Cursor → 当前项目的 .cursor/rules/proxybaby.mdc
+3. 跑 `proxybaby status` 验证连接
+4. 完成后告诉我可以直接说"帮我 mock xxx"了
 ```
 
-之后你就可以直接对 AI 说：**"帮我 mock 掉 api.example.com/user 让它返回 `{ok:true}`"** —— 它会自动调用 `proxybaby rule add` 完成。
+装完就能用，不需要任何 API key、不需要额外配置。
 
-### 你能让 AI 干什么
+### 💡 能解决什么真实问题？
 
-一切都是普通 shell 命令，agent 只需要 Bash 权限：
+不是玩具 demo，是每天写代码会遇到的场景：
 
-- **Mock 一个接口**：`proxybaby rule add mock-user --text 'api.example.com/user mock://{"id":1,"ok":true}'`
-- **把线上流量劫持到本地**：`proxybaby rule add local-dev --text 'api.example.com host://127.0.0.1:3000'`
-- **注入 header 做鉴权测试**：`proxybaby rule add force-auth --text '*.internal.com/* reqHeaders://{"Authorization":"Bearer test"}'`
-- **模拟 500 / 网络慢**：`proxybaby rule add flaky --text 'api.foo.com/pay statusCode://500 resDelay://2000'`
-- **抓取 & 分析线上流量**：`proxybaby record on` → 操作 → `proxybaby session export --har --out /tmp/x.har` → agent 读 HAR
-- **调试 AI 应用自身**：让 agent 抓自己发出的 OpenAI / Anthropic 请求，UI 里直接看到对话
+#### 场景 1：后端接口还没好，前端要开工
+> **你说**：后端说 `/api/orders/list` 明天才出，先给我 mock 20 条订单，字段有 id/user/amount/status
+>
+> **AI 做**：
+> ```bash
+> proxybaby rule add mock-orders --text '/api/orders/list mock://{"data":[{"id":1,"user":"A","amount":100,"status":"paid"},...20条]}'
+> ```
+> 前端刷新页面直接看到列表。
+
+#### 场景 2：复现线上 500 bug
+> **你说**：QA 反馈支付偶尔 500，我要在本地稳定复现
+>
+> **AI 做**：
+> ```bash
+> proxybaby rule add repro-pay-500 --text 'api.mycompany.com/pay statusCode://500 resDelay://2000 resBody://{"error":"timeout"}'
+> ```
+> 每次调支付都稳定超时 + 500，跟着复现 UI 错误处理。
+
+#### 场景 3：调试第三方 SDK 到底发了啥
+> **你说**：帮我看看 Stripe SDK 具体调用了什么接口，参数是什么
+>
+> **AI 做**：
+> ```bash
+> proxybaby record clear && proxybaby record on
+> # → 你在 app 里点几下购买
+> proxybaby session export --har --out /tmp/stripe.har
+> ```
+> AI 读 HAR，直接告诉你："SDK 调了 3 个接口：`/v1/payment_intents` (POST amount=1999), `/v1/customers` (GET)..."
+
+#### 场景 4：验证前端在鉴权失效时的行为
+> **你说**：模拟登录态过期，看看前端会不会正确跳登录页
+>
+> **AI 做**：
+> ```bash
+> proxybaby rule add expired-auth --text 'api.mycompany.com/* statusCode://401 resBody://{"code":"TOKEN_EXPIRED"}'
+> ```
+> 所有接口秒变 401，验证跳转逻辑。改回来：`proxybaby rule disable expired-auth`
+
+#### 场景 5：把生产域名劫持到本地开发服务
+> **你说**：让 `api.mycompany.com` 指向我本地的 `localhost:3000`，但请求原样透传
+>
+> **AI 做**：
+> ```bash
+> proxybaby rule add local-dev --text 'api.mycompany.com host://127.0.0.1:3000'
+> ```
+> 生产 App 一行代码不改，流量全打到本地。
+
+#### 场景 6：调试你自己的 AI 应用
+> **你说**：我在写一个 Claude 集成，帮我看看请求体到底发对了没
+>
+> **AI 做**：
+> ```bash
+> proxybaby app open
+> proxybaby record on
+> ```
+> 你运行 AI 应用 → **UI 里直接看到 Anthropic 请求被渲染成完整对话气泡**（含 tool_use / thinking 块），不用手动 parse SSE。
+
+#### 场景 7：慢网络下的 UX 测试
+> **你说**：模拟 3G 网络看看首屏
+>
+> **AI 做**：调 `proxybaby` CLI 打开 3G 限速 + 加规则给静态资源加 500ms 延迟。
+
+#### 场景 8：一键清场
+> **你说**：不 mock 了，恢复正常
+>
+> **AI 做**：`proxybaby record clear && proxybaby rule list | ...` 批量 disable 所有 mock 规则。
+
+### 为什么这个组合特别强
+
+- **CLI 覆盖 100% 能力** — UI 能做的，CLI 都能做；不像 Charles/Proxyman 只有部分脚本 API
+- **一切都是 shell 命令** — agent 只需要 Bash 权限，不需要装任何 SDK、不吃 token
+- **SKILL.md 讲清了每个操作符怎么用** — AI 不用瞎猜、不用读源码
+- **本地闭环** — 通过 `127.0.0.1:8898` 通信，全程不出你机器
+- **和 UI 双向** — AI 加的规则你能在 UI 看到并微调；UI 里改的 AI 也能读
 
 ### CLI 全集
 

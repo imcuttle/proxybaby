@@ -309,7 +309,16 @@ proxybaby plugin disable <id>
 
 ## 快速开始
 
-需要 Node 18+ 和 macOS。
+需要 macOS。**装完 app 就即用，无需额外操作**：
+
+- **下载 DMG**（推荐）：到 [Releases](https://github.com/imcuttle/proxybaby/releases) 下载最新 `.dmg`，拖进 `/Applications`，双击打开
+- 首次启动会：
+  1. 弹一次管理员密码，把根 CA 装进系统钥匙串（之后启动无提示）
+  2. 自动把 `proxybaby` CLI 装到 `/usr/local/bin/`（用户可写就静默完成；如果不可写会在设置里显示"用管理员权限安装 CLI"按钮）
+- 之后你在任意终端里都能：`proxybaby status` / `proxybaby rule add ...`
+- 想让 AI 也会用？把 [README 上面那段 prompt](#-面向-ai-的完整-cli--skill) 丢给你的 agent，它会自动从 GitHub 拉 `skills/proxybaby/SKILL.md` 到本地
+
+从源码开发：
 
 ```bash
 git clone https://github.com/imcuttle/proxybaby.git
@@ -318,9 +327,6 @@ npm install
 npm run dev             # dev（vite + electron，热重载）
 # 或直接打包安装到 /Applications：
 npm run install:mac
-
-# 让 CLI 全局可用：
-npm link                # 之后就能到处 proxybaby
 ```
 
 首次运行会弹一次系统管理员密码框，把根 CA 加入系统钥匙串并置为受信任。之后启动无需再确认。

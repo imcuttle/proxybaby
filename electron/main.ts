@@ -25,6 +25,7 @@ import { SslListStore, setSslListStore } from './engine/ssl-list';
 import { UpstreamProxyStore, setUpstreamProxyStore } from './engine/upstream-proxy';
 import { setGlobalThrottle, getGlobalThrottle } from './engine/network-conditions';
 import { startControlServer, stopControlServer } from './control/control-server';
+import { installCliLink, installCliLinkWithSudo } from './system/cli-install';
 import { exportProxybaby, importProxybaby, exportHAR } from './store/session-io';
 import { repeatFlow } from './proxy/flow-repeat';
 import { AiManager } from './ai/manager';
@@ -539,6 +540,11 @@ function setupIpc() {
     broadcast('cert:status', certStatus);
     return certStatus;
   });
+
+  // CLI wrapper 安装（用户在设置界面点"安装 CLI"时触发）
+  ipcMain.handle('cli:install', async () => installCliLink({ force: false }));
+  ipcMain.handle('cli:install-sudo', async () => installCliLinkWithSudo());
+
   ipcMain.handle('flow:all', () => store.all());
 
   // 单个 flow 操作
@@ -874,6 +880,18 @@ app.whenReady().then(async () => {
     const dockIcon = nativeImage.createFromPath(path.join(__dirname, '../assets/icon-rounded.png'));
     if (!dockIcon.isEmpty() && app.dock) app.dock.setIcon(dockIcon);
   } catch {}
+  // 首次启动 / 每次启动都幂等地把 CLI wrapper 装到 /usr/local/bin，让 `proxybaby` 命令
+  // 在 shell 里可用。写不进去（需要 sudo）时静默跳过——UI 可以再暴露一个"提权安装"按钮。
+  try {
+    const r = await installCliLink();
+    if (r.ok && (r.created || r.updated)) {
+      console.log(`[proxybaby] CLI ${r.created ? 'installed' : 'updated'} at ${r.path}`);
+    } else if (!r.ok && !/开发模式|仅支持 macOS/.test(r.reason)) {
+      console.log('[proxybaby] CLI install skipped:', r.reason);
+    }
+  } catch (err) {
+    console.warn('[proxybaby] CLI install error', err);
+  }
   setupIpc();
   createTray();
   showMainWindow();

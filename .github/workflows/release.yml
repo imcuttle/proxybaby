@@ -50,7 +50,7 @@ jobs:
           echo "Releasing $VER"
 
       - name: Install
-        run: npm ci
+        run: npm ci --omit=optional
 
       - name: Typecheck + unit tests
         run: |

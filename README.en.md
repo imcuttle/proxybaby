@@ -309,18 +309,24 @@ Run `proxybaby --help` for the full manual.
 
 ## Quick start
 
-Requires Node 18+ and macOS.
+macOS required. **Install the app and you're done — no extra setup**:
+
+- **Grab the DMG** (recommended): download the latest `.dmg` from [Releases](https://github.com/imcuttle/proxybaby/releases), drag into `/Applications`, open it.
+- On first launch the app will:
+  1. Prompt once for your admin password to trust the generated root CA (silent afterward).
+  2. Auto-install the `proxybaby` CLI wrapper to `/usr/local/bin/` (silent if writable; otherwise a "Install CLI with admin" button appears in Settings).
+- Then you can use `proxybaby status` / `proxybaby rule add ...` from any terminal.
+- Want your AI agent to use it too? Copy the [one-line prompt above](#-ai-friendly-full-cli--skill) into your assistant — it will fetch `skills/proxybaby/SKILL.md` from GitHub.
+
+Build from source:
 
 ```bash
 git clone https://github.com/imcuttle/proxybaby.git
 cd proxybaby
 npm install
-npm run dev             # dev mode (vite + electron, HMR)
+npm run dev             # vite + electron (HMR)
 # or pack & install to /Applications:
 npm run install:mac
-
-# Make the CLI globally available:
-npm link                # then `proxybaby` works from anywhere
 ```
 
 First launch prompts once for your admin password to trust the generated root CA in the system keychain. After that, silent.

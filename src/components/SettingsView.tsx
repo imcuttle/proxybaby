@@ -21,7 +21,6 @@ export function SettingsView() {
     <div className="h-full flex flex-col overflow-y-auto pb-scroll" data-testid="settings-view">
       <div className="p-4 space-y-6 max-w-4xl">
         <AiPanel />
-        <ScriptsMovedNotice />
         <FilterConfigEntry />
         <NetworkPanel />
         <UpstreamProxyPanel />
@@ -49,10 +48,12 @@ function AiPanel() {
 
   return (
     <section data-testid="ai-settings">
-      <h2 className="text-lg font-semibold mb-2">AI 助手</h2>
-      <div className="text-xs text-pb-muted mb-3">
-        默认调用本机 <code>codebuddy</code>（Agent Client Protocol，stdio 模式）。
-      </div>
+      <SectionHeader
+        title="AI 助手"
+        subtitle={
+          <>默认调用本机 <code className="text-pb-accent">codebuddy</code>（Agent Client Protocol，stdio 模式）。</> as any
+        }
+      />
       <div className="space-y-3 rounded border border-pb-border bg-pb-panel/40 p-3">
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -97,16 +98,6 @@ function AiPanel() {
           </select>
         </div>
       </div>
-    </section>
-  );
-}
-
-// -------- Scripts 迁移提示（已内置到规则页面） --------
-
-function ScriptsMovedNotice() {
-  return (
-    <section data-testid="scripts-moved">
-      <SectionHeader title="脚本（Scripts）" subtitle="已迁移到主界面的『规则』标签页顶部子标签『脚本（Scripts）』。" />
     </section>
   );
 }
@@ -213,7 +204,7 @@ function UpstreamProxyPanel() {
   );
 }
 
-function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+function SectionHeader({ title, subtitle }: { title: string; subtitle?: React.ReactNode }) {
   return (
     <div className="mb-2">
       <div className="text-sm font-semibold">{title}</div>

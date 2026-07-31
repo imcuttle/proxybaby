@@ -55,6 +55,9 @@ export function FilterEntryEditorView() {
       if (params.scope === 'ssl') {
         const cur = await window.proxybaby.sslListGet();
         await window.proxybaby.sslListSet({ ...cur, entries: [...cur.entries, entry] });
+      } else if (params.scope === 'record') {
+        const cur = await window.proxybaby.recordFilterGet();
+        await window.proxybaby.recordFilterSet({ ...cur, entries: [...cur.entries, entry] });
       } else {
         const cur = await window.proxybaby.allowBlockGet();
         await window.proxybaby.allowBlockSet({ ...cur, entries: [...cur.entries, entry] });

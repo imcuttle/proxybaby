@@ -377,19 +377,52 @@ test('域名 subpath 过滤', async () => {
   await page.getByText('api.demo.com', { exact: true }).first().click(); // 取消
 });
 
-test('侧栏右键：将域名加入 SSL 排除列表（不抓包解密）', async () => {
+test('侧栏右键：将域名加入抓包排除列表（record-filter exclude）', async () => {
   await resetFilters();
-  // 先清空当前 SSL 配置，避免脏数据
+  // 先清空 record-filter，避免脏数据
   await page.evaluate(async () => {
-    await (window as any).proxybaby.sslListSet({ enabled: true, mode: 'all', entries: [] });
+    await (window as any).proxybaby.recordFilterSet({ mode: 'all', entries: [] });
   });
   const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
   await expect(hostRow).toBeVisible();
   await hostRow.click({ button: 'right' });
   await page.getByText(/抓包时排除此域名/).click();
-  const cfg = await page.evaluate(async () => await (window as any).proxybaby.sslListGet());
+  const cfg = await page.evaluate(async () => await (window as any).proxybaby.recordFilterGet());
   expect(cfg.mode).toBe('exclude');
   expect(cfg.entries.some((e: any) => e.kind === 'host' && e.value === 'api.demo.com')).toBe(true);
+});
+
+test('侧栏右键：将域名加入抓包包含列表（record-filter include）', async () => {
+  await resetFilters();
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.recordFilterSet({ mode: 'all', entries: [] });
+  });
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
+  await expect(hostRow).toBeVisible();
+  await hostRow.click({ button: 'right' });
+  await page.getByText(/^仅抓取此域名$/).click();
+  const cfg = await page.evaluate(async () => await (window as any).proxybaby.recordFilterGet());
+  expect(cfg.mode).toBe('include');
+  expect(cfg.entries.some((e: any) => e.kind === 'host' && e.value === 'api.demo.com')).toBe(true);
+});
+
+test('侧栏右键：置顶此域名 → 出现在收藏夹已置顶分组', async () => {
+  await resetFilters();
+  // 先清掉可能残留的 pinnedHosts
+  await page.evaluate(() => {
+    localStorage.removeItem('proxybaby:pinned-hosts');
+    localStorage.removeItem('proxybaby:pinned-paths');
+  });
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
+  await expect(hostRow).toBeVisible();
+  await hostRow.click({ button: 'right' });
+  await page.getByText(/^置顶此域名$/).click();
+  // 收藏夹"已置顶" chip 计数 > 0
+  const pinned = await page.evaluate(() => {
+    const v = localStorage.getItem('proxybaby:pinned-hosts');
+    return v ? JSON.parse(v) : [];
+  });
+  expect(pinned).toContain('api.demo.com');
 });
 
 test('侧栏右键：快速规则 → 禁止访问，生成临时规则', async () => {
@@ -615,15 +648,15 @@ test('过滤配置窗口：Allow/Block 添加 host 条目（编辑器为独立�
   await w.getByTestId('close-self').click();
 });
 
-test('过滤配置窗口：SSL 添加 App 维度条目', async () => {
+test('过滤配置窗口：录制过滤添加 App 维度条目', async () => {
   const w = await openFilterConfigWindow();
-  await expect(w.getByTestId('ssl-panel')).toBeVisible();
-  await w.getByTestId('ssl-add').click();
+  await expect(w.getByTestId('record-filter-panel')).toBeVisible();
+  await w.getByTestId('record-add').click();
   const editor = await waitForEntryEditorWindow();
   await editor.getByTestId('fee-kind-app').click();
   await editor.getByTestId('fee-value').fill('Google Chrome');
   await editor.getByTestId('fee-save').click();
-  await expect(w.getByTestId('ssl-panel')).toContainText('Google Chrome');
+  await expect(w.getByTestId('record-filter-panel')).toContainText('Google Chrome');
   await w.getByTestId('close-self').click();
 });
 

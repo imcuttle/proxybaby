@@ -1,33 +1,35 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, ShieldCheck, Ban } from 'lucide-react';
+import { Plus, Trash2, Ban, Filter } from 'lucide-react';
 import type {
   AllowBlockConfig,
-  SslDecryptConfig,
+  RecordFilterConfig,
   FilterEntry,
   FilterKind,
 } from '../../../shared/types';
 import { cn } from '../../lib/cn';
 
 /**
- * 过滤配置总视图：顶部 Tab 切换 SSL / Allow-Block；每个 Tab 内含二级模式切换 + 三维度条目表格。
+ * 过滤配置总视图：两个 Tab
+ *   1. 抓包记录过滤 (record filter)：决定哪些请求进 flow list（对 HTTP + HTTPS 都生效，不影响请求本身）。
+ *      每条 include/exclude 条目还有一个"SSL 解密"开关：勾了就 MITM 该条目的 HTTPS，否则直通不解密。
+ *   2. 允许 / 阻止：决定哪些请求被 abort（真正拒绝访问）
  *
- * 数据流：所有变更走 IPC 的 sslList:set / allowBlock:set，主进程即时落盘并返回新配置；
- * 本地 state 是"上次服务器状态的镜像"，用户操作后 optimistic 更新 + 服务器回执覆盖。
+ * 数据流：所有变更走 IPC 的 recordFilter:set / allowBlock:set，主进程即时落盘并返回新配置。
  */
 export function FilterConfigView() {
-  const [tab, setTab] = useState<'ssl' | 'allow-block'>('ssl');
+  const [tab, setTab] = useState<'record' | 'allow-block'>('record');
   return (
     <div className="h-full flex flex-col bg-pb-bg text-pb-text overflow-hidden">
       <div className="flex border-b border-pb-border bg-pb-panel px-2 pt-1.5 gap-1 text-xs">
-        <TabButton active={tab === 'ssl'} onClick={() => setTab('ssl')} testId="tab-ssl">
-          <ShieldCheck size={12} /> SSL 代理列表
+        <TabButton active={tab === 'record'} onClick={() => setTab('record')} testId="tab-record">
+          <Filter size={12} /> 抓包记录过滤
         </TabButton>
         <TabButton active={tab === 'allow-block'} onClick={() => setTab('allow-block')} testId="tab-allowblock">
           <Ban size={12} /> 允许 / 阻止
         </TabButton>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto pb-scroll">
-        {tab === 'ssl' ? <SslTab /> : <AllowBlockTab />}
+        {tab === 'record' ? <RecordFilterTab /> : <AllowBlockTab />}
       </div>
     </div>
   );
@@ -58,72 +60,59 @@ function TabButton({
   );
 }
 
-// ============ SSL Tab ============
-function SslTab() {
-  const [cfg, setCfg] = useState<SslDecryptConfig>({ enabled: true, mode: 'all', entries: [] });
+// ============ Record filter Tab (抓包记录过滤) ============
+function RecordFilterTab() {
+  const [cfg, setCfg] = useState<RecordFilterConfig>({ mode: 'all', entries: [] });
 
-  const refresh = async () => setCfg(await window.proxybaby.sslListGet());
+  const refresh = async () => setCfg(await window.proxybaby.recordFilterGet());
   useEffect(() => { refresh(); }, []);
   useEffect(() => {
     const off = window.proxybaby.onEvent('filter-entry-editor:committed' as any, (p: any) => {
-      if (p?.scope === 'ssl') refresh();
+      if (p?.scope === 'record') refresh();
     });
     return () => off();
   }, []);
 
-  const save = async (next: SslDecryptConfig) => setCfg(await window.proxybaby.sslListSet(next));
-
-  const setEnabled = (enabled: boolean) => save({ ...cfg, enabled });
-  const setMode = (mode: SslDecryptConfig['mode']) => save({ ...cfg, mode });
+  const save = async (next: RecordFilterConfig) => setCfg(await window.proxybaby.recordFilterSet(next));
+  const setMode = (mode: RecordFilterConfig['mode']) => save({ ...cfg, mode });
   const setEntries = (entries: FilterEntry[]) => save({ ...cfg, entries });
 
   return (
-    <div className="p-4 space-y-3" data-testid="ssl-panel">
-      <div className="flex items-center gap-2">
-        <label className="inline-flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            data-testid="ssl-enabled"
-            checked={cfg.enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          启用 SSL 代理工具
-        </label>
-        <span className="text-xs text-pb-muted ml-2">
-          定义 ProxyBaby 将解密其 HTTPS 请求/响应的客户端或域（通配符）。
-        </span>
+    <div className="p-4 space-y-3" data-testid="record-filter-panel">
+      <div className="text-xs text-pb-muted">
+        决定哪些请求会被抓到列表里显示。<b>只影响 UI 记录，不影响请求本身</b>——命中"不记录"的请求依然会正常代理到上游。
+        对 HTTP 和 HTTPS 都生效。
       </div>
 
-      <div className="flex text-xs items-center gap-3" data-testid="ssl-mode">
+      <div className="flex text-xs items-center gap-3" data-testid="record-mode">
         {(['all', 'include', 'exclude'] as const).map((m) => (
           <label key={m} className="inline-flex items-center gap-1 cursor-pointer">
             <input
               type="radio"
-              name="ssl-mode"
-              data-testid={`ssl-mode-${m}`}
+              name="record-mode"
+              data-testid={`record-mode-${m}`}
               checked={cfg.mode === m}
               onChange={() => setMode(m)}
             />
-            {m === 'all' ? '全部解密' : m === 'include' ? '仅包含列表' : '排除列表外全部解密'}
+            {m === 'all' ? '全部记录' : m === 'include' ? '仅记录以下列表' : '排除以下列表'}
           </label>
         ))}
       </div>
 
       <div className="text-xs text-pb-muted">
         {cfg.mode === 'all'
-          ? '当前是"全部解密"模式：所有 HTTPS 都尝试 MITM，下方列表暂不生效。'
+          ? '当前是"全部记录"模式：所有请求都会显示在列表里。'
           : cfg.mode === 'include'
-            ? '仅拦截并解密下方列表中的 HTTPS，其余全部直通不解密。'
-            : '不解密下方列表中的 HTTPS，其余全部解密。'}
+            ? '仅命中下方列表的请求会被记录，其他请求仍会代理但不显示。'
+            : '命中下方列表的请求不会显示，其他请求正常记录。'}
       </div>
 
       <EntryTable
         entries={cfg.entries}
         onChange={setEntries}
-        scope="ssl"
+        scope="record"
         allowUrl
-        showUrlHint
-        testIdPrefix="ssl"
+        testIdPrefix="record"
       />
     </div>
   );
@@ -181,12 +170,13 @@ function EntryTable({
 }: {
   entries: FilterEntry[];
   onChange: (next: FilterEntry[]) => void;
-  scope: 'ssl' | 'allow-block';
+  scope: 'record' | 'allow-block';
   allowUrl: boolean;
   showUrlHint?: boolean;
   testIdPrefix: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const showDecrypt = scope === 'record';
 
   const updateEntry = (id: string, patch: Partial<FilterEntry>) =>
     onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));
@@ -196,12 +186,23 @@ function EntryTable({
     void window.proxybaby.filterEntryEditorOpen({ scope, allowUrl });
   };
 
+  // record scope 多一列"SSL 解密"
+  const gridCls = showDecrypt
+    ? 'grid grid-cols-[70px_1fr_90px_70px_1fr_50px] text-xs border-b border-pb-border/50 items-center'
+    : 'grid grid-cols-[70px_1fr_100px_1fr_50px] text-xs border-b border-pb-border/50 items-center';
+  const headerCls = showDecrypt
+    ? 'grid grid-cols-[70px_1fr_90px_70px_1fr_50px] text-xs bg-pb-panel border-b border-pb-border'
+    : 'grid grid-cols-[70px_1fr_100px_1fr_50px] text-xs bg-pb-panel border-b border-pb-border';
+
   return (
     <div className="border border-pb-border rounded overflow-hidden">
-      <div className="grid grid-cols-[70px_1fr_100px_1fr_50px] text-xs bg-pb-panel border-b border-pb-border">
+      <div className={headerCls}>
         <div className="px-2 py-1">类型</div>
         <div className="px-2 py-1">值</div>
         <div className="px-2 py-1">选项</div>
+        {showDecrypt && (
+          <div className="px-2 py-1 text-center" title="是否 MITM 解密该条目命中的 HTTPS 流量">SSL 解密</div>
+        )}
         <div className="px-2 py-1">备注</div>
         <div className="px-2 py-1 text-center">启用</div>
       </div>
@@ -220,10 +221,7 @@ function EntryTable({
             <div
               key={e.id}
               onClick={() => setSelectedId(e.id)}
-              className={cn(
-                'grid grid-cols-[70px_1fr_100px_1fr_50px] text-xs border-b border-pb-border/50 items-center cursor-pointer',
-                selectedId === e.id && 'bg-pb-accent/10',
-              )}
+              className={cn(gridCls, 'cursor-pointer', selectedId === e.id && 'bg-pb-accent/10')}
               data-testid={`${testIdPrefix}-row-${e.kind}-${e.value}`}
             >
               <div className="px-2 py-1"><KindChip kind={e.kind} /></div>
@@ -231,6 +229,18 @@ function EntryTable({
               <div className="px-2 py-1 text-pb-muted">
                 {e.kind === 'url' ? (e.urlMode ?? 'glob') : '—'}
               </div>
+              {showDecrypt && (
+                <div className="px-2 py-1 text-center">
+                  <input
+                    type="checkbox"
+                    checked={e.decrypt !== false}
+                    onChange={(ev) => updateEntry(e.id, { decrypt: ev.target.checked })}
+                    onClick={(ev) => ev.stopPropagation()}
+                    data-testid={`${testIdPrefix}-decrypt-${e.id}`}
+                    title="勾选：命中此条目的 HTTPS 走 MITM 解密；不勾：直通不解密，UI 里只能看到 CONNECT。"
+                  />
+                </div>
+              )}
               <div className="px-2 py-1 text-pb-muted truncate" title={e.note}>{e.note || ''}</div>
               <div className="px-2 py-1 text-center">
                 <input

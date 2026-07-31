@@ -98,6 +98,7 @@ export function upgradeToEntries(raw: unknown): FilterEntry[] {
             : undefined,
           enabled: it.enabled === false ? false : true,
           note: typeof it.note === 'string' ? it.note : undefined,
+          ...(typeof it.decrypt === 'boolean' ? { decrypt: it.decrypt } : {}),
         });
       }
     }

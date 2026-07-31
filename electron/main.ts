@@ -21,6 +21,7 @@ import { PluginManager } from './engine/plugins';
 import { BreakpointController } from './engine/breakpoint';
 import { ScriptStore, setScriptStore } from './engine/scripts';
 import { AllowBlockStore, setAllowBlockStore } from './engine/allow-block';
+import { RecordFilterStore, setRecordFilterStore } from './engine/record-filter';
 import { SslListStore, setSslListStore } from './engine/ssl-list';
 import { UpstreamProxyStore, setUpstreamProxyStore } from './engine/upstream-proxy';
 import { setGlobalThrottle, getGlobalThrottle } from './engine/network-conditions';
@@ -51,6 +52,7 @@ let ruleEngine: RuleEngine | null = null;
 let pluginManager: PluginManager | null = null;
 let scriptStore: ScriptStore | null = null;
 let allowBlockStore: AllowBlockStore | null = null;
+let recordFilterStore: RecordFilterStore | null = null;
 let sslListStore: SslListStore | null = null;
 let upstreamProxyStore: UpstreamProxyStore | null = null;
 const breakpointController = new BreakpointController();
@@ -111,6 +113,8 @@ async function bootstrapProxy() {
   setScriptStore(scriptStore);
   allowBlockStore = new AllowBlockStore();
   setAllowBlockStore(allowBlockStore);
+  recordFilterStore = new RecordFilterStore();
+  setRecordFilterStore(recordFilterStore);
   sslListStore = new SslListStore();
   setSslListStore(sslListStore);
   upstreamProxyStore = new UpstreamProxyStore();
@@ -777,6 +781,10 @@ function setupIpc() {
   // ---- Allow / Block List ----
   ipcMain.handle('allowBlock:get', () => allowBlockStore?.get() ?? { mode: 'off', entries: [] });
   ipcMain.handle('allowBlock:set', (_e, cfg: AllowBlockConfig) => allowBlockStore?.set(cfg) ?? { mode: 'off', entries: [] });
+
+  // ---- Record filter (决定哪些请求进 flow list) ----
+  ipcMain.handle('recordFilter:get', () => recordFilterStore?.get() ?? { mode: 'all', entries: [] });
+  ipcMain.handle('recordFilter:set', (_e, cfg: any) => recordFilterStore?.set(cfg) ?? { mode: 'all', entries: [] });
 
   // ---- SSL Decrypt list ----
   ipcMain.handle('sslList:get', () => sslListStore?.get() ?? { enabled: true, mode: 'all', entries: [] });

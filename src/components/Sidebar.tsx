@@ -212,24 +212,25 @@ export function Sidebar() {
   };
 
   /**
-   * 把一条 app/host/url 加入允许 / 阻止列表——这是真正影响"抓/不抓"的过滤，对 HTTP/HTTPS 都生效。
-   *   - mode='allow' → allow-block 切到"仅允许列表"，其余请求被抓但会被 abort
-   *   - mode='block' → allow-block 切到"阻止列表"，命中项直接 abort
+   * 把一条 app/host/url 加入抓包记录过滤（record filter）——**真正影响"抓/不抓"** 的过滤，对 HTTP + HTTPS 都生效。
+   *   - mode='include' → record-filter 切到"仅记录列表"，命中项被记录，其余请求正常代理但不显示
+   *   - mode='exclude' → record-filter 切到"排除列表"，命中项不显示，其余正常记录
+   * 请求本身不会被阻止 —— 与 Allow/Block（会 abort）语义不同。
    */
-  const addToAllowBlockList = async (kind: FilterKind, value: string, mode: 'allow' | 'block') => {
+  const addToRecordFilter = async (kind: FilterKind, value: string, mode: 'include' | 'exclude') => {
     try {
-      const cur = await window.proxybaby.allowBlockGet();
+      const cur = await window.proxybaby.recordFilterGet();
       const val = kind === 'url' ? (value.endsWith('*') ? value : `${value}*`) : value;
       const exists = cur.entries.some((e) => e.kind === kind && e.value === val);
       const entries: FilterEntry[] = exists
         ? cur.entries
         : [
             ...cur.entries,
-            { id: `sb-ab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            { id: `sb-rf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               kind, value: val, enabled: true,
               ...(kind === 'url' ? { urlMode: 'glob' as const } : {}) },
           ];
-      await window.proxybaby.allowBlockSet({ mode, entries });
+      await window.proxybaby.recordFilterSet({ mode, entries });
     } catch {}
   };
 
@@ -279,7 +280,7 @@ export function Sidebar() {
                 onAlphaSort={() => setAlphaSort((v) => !v)}
                 onReveal={() => revealInFinder(meta.bundlePath)}
                 onDelete={() => deleteAppFlows(name, meta.flowIds)}
-                onAddToList={(mode) => addToAllowBlockList('app', name, mode)}
+                onAddToList={(mode) => addToRecordFilter('app', name, mode)}
               >
                 <Item
                   icon={meta.iconDataUrl
@@ -320,8 +321,8 @@ export function Sidebar() {
                 toggleMitmDisabledHost(host);
                 window.proxybaby.mitmDisableHost(host, !cur);
               }}
-              onAddToList={(mode) => addToAllowBlockList('host', host, mode)}
-              onAddUrlToList={(prefix, mode) => addToAllowBlockList('url', prefix, mode)}
+              onAddToList={(mode) => addToRecordFilter('host', host, mode)}
+              onAddUrlToList={(prefix, mode) => addToRecordFilter('url', prefix, mode)}
               onDeleteHost={() => deleteHostFlows(host)}
               onDeleteSubpath={(prefix) => deleteHostFlows(host, prefix)}
               quickRulePresets={quickRulePresets}
@@ -358,7 +359,7 @@ function AppContextMenu({
   onAlphaSort: () => void;
   onReveal: () => void;
   onDelete: () => void;
-  onAddToList: (mode: 'allow' | 'block') => void;
+  onAddToList: (mode: 'include' | 'exclude') => void;
   children: React.ReactNode;
 }) {
   const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
@@ -384,10 +385,10 @@ function AppContextMenu({
           </ContextMenu.Item>
 
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
+          <ContextMenu.Item onSelect={() => onAddToList('include')} className={itemCls}>
             <span className="flex-1">仅抓取此应用</span>
           </ContextMenu.Item>
-          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
+          <ContextMenu.Item onSelect={() => onAddToList('exclude')} className={itemCls}>
             <span className="flex-1">抓包时排除此应用</span>
           </ContextMenu.Item>
 
@@ -467,8 +468,8 @@ function HostItem({
   isPathPinned: (prefix: string) => boolean;
   onTogglePinPath: (prefix: string) => void;
   onToggleSsl: () => void;
-  onAddToList: (mode: 'allow' | 'block') => void;
-  onAddUrlToList: (prefix: string, mode: 'allow' | 'block') => void;
+  onAddToList: (mode: 'include' | 'exclude') => void;
+  onAddUrlToList: (prefix: string, mode: 'include' | 'exclude') => void;
   onDeleteHost: () => void;
   onDeleteSubpath: (prefix: string) => void;
   quickRulePresets: QuickRulePreset[];
@@ -490,7 +491,7 @@ function HostItem({
         pinned={pinned}
         onTogglePin={onTogglePin}
         onToggleSsl={onToggleSsl}
-        onAddAllowBlock={onAddToList}
+        onAddRecord={onAddToList}
         onDelete={onDeleteHost}
         quickRulePresets={quickRulePresets}
         onApplyQuickRule={onApplyQuickRule}
@@ -529,7 +530,7 @@ function HostItem({
             prefix={prefix}
             pinned={isPathPinned(prefix)}
             onTogglePin={() => onTogglePinPath(prefix)}
-            onAddAllowBlock={(mode) => onAddUrlToList(prefix, mode)}
+            onAddRecord={(mode) => onAddUrlToList(prefix, mode)}
             onDelete={() => onDeleteSubpath(prefix)}
             quickRulePresets={quickRulePresets}
             onApplyQuickRule={onApplyQuickRule}
@@ -562,7 +563,7 @@ function HostContextMenu({
   pinned,
   onTogglePin,
   onToggleSsl,
-  onAddAllowBlock,
+  onAddRecord,
   onDelete,
   quickRulePresets,
   onApplyQuickRule,
@@ -574,7 +575,7 @@ function HostContextMenu({
   pinned: boolean;
   onTogglePin: () => void;
   onToggleSsl: () => void;
-  onAddAllowBlock: (mode: 'allow' | 'block') => void;
+  onAddRecord: (mode: 'include' | 'exclude') => void;
   onDelete: () => void;
   quickRulePresets: QuickRulePreset[];
   onApplyQuickRule: (pattern: string, preset: QuickRulePreset) => void;
@@ -598,10 +599,10 @@ function HostContextMenu({
             <span className="flex-1">复制域名</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item onSelect={() => onAddAllowBlock('allow')} className={itemCls}>
+          <ContextMenu.Item onSelect={() => onAddRecord('include')} className={itemCls}>
             <span className="flex-1">仅抓取此域名</span>
           </ContextMenu.Item>
-          <ContextMenu.Item onSelect={() => onAddAllowBlock('block')} className={itemCls}>
+          <ContextMenu.Item onSelect={() => onAddRecord('exclude')} className={itemCls}>
             <span className="flex-1">抓包时排除此域名</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
@@ -626,7 +627,7 @@ function SubpathContextMenu({
   prefix,
   pinned,
   onTogglePin,
-  onAddAllowBlock,
+  onAddRecord,
   onDelete,
   quickRulePresets,
   onApplyQuickRule,
@@ -636,7 +637,7 @@ function SubpathContextMenu({
   prefix: string;
   pinned: boolean;
   onTogglePin: () => void;
-  onAddAllowBlock: (mode: 'allow' | 'block') => void;
+  onAddRecord: (mode: 'include' | 'exclude') => void;
   onDelete: () => void;
   quickRulePresets: QuickRulePreset[];
   onApplyQuickRule: (pattern: string, preset: QuickRulePreset) => void;
@@ -659,10 +660,10 @@ function SubpathContextMenu({
             <span className="flex-1">复制 URL 前缀</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item onSelect={() => onAddAllowBlock('allow')} className={itemCls}>
+          <ContextMenu.Item onSelect={() => onAddRecord('include')} className={itemCls}>
             <span className="flex-1">仅抓取此路径</span>
           </ContextMenu.Item>
-          <ContextMenu.Item onSelect={() => onAddAllowBlock('block')} className={itemCls}>
+          <ContextMenu.Item onSelect={() => onAddRecord('exclude')} className={itemCls}>
             <span className="flex-1">抓包时排除此路径</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />

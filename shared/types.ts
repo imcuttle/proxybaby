@@ -237,6 +237,13 @@ export interface FilterEntry {
   urlMode?: UrlMatchMode;
   enabled: boolean;
   note?: string;
+  /**
+   * 仅用于抓包过滤（record filter）的条目：是否 MITM 解密该条目命中的 HTTPS 流量。
+   *   - undefined / true → 解密（默认）
+   *   - false          → 不解密（保持 CONNECT 隧道直通，UI 里能看到条目但内容不可见）
+   * 对 HTTP 请求无意义。对 allow-block / ssl-list 面板忽略。
+   */
+  decrypt?: boolean;
 }
 
 export interface FilterMatchCtx {
@@ -253,10 +260,19 @@ export interface AllowBlockConfig {
   entries: FilterEntry[];
 }
 
+// ============ Recording Filter (抓包记录过滤) ============
+// 与 SSL / Allow-Block 完全独立：只决定"是否记录进 flow list 让 UI 显示"，
+// 请求本身正常代理。HTTP + HTTPS 都生效。
+export type RecordFilterMode = 'all' | 'include' | 'exclude';
+export interface RecordFilterConfig {
+  mode: RecordFilterMode;
+  entries: FilterEntry[];
+}
+
 // FilterEntry 编辑器子窗口的初始参数。
 // scope 用于窗口提交时决定写哪个 store，以及告诉编辑器要不要展示 URL 类目。
 export interface FilterEntryEditorParams {
-  scope: 'ssl' | 'allow-block';
+  scope: 'ssl' | 'allow-block' | 'record';
   allowUrl: boolean;  // ssl 也允许 url 类目（虽然 CONNECT 阶段不生效，仍允许配置）
   title?: string;
 }
@@ -318,6 +334,8 @@ export interface ProxyBabyBridge {
   // Allow/Block List
   allowBlockGet(): Promise<AllowBlockConfig>;
   allowBlockSet(cfg: AllowBlockConfig): Promise<AllowBlockConfig>;
+  recordFilterGet(): Promise<RecordFilterConfig>;
+  recordFilterSet(cfg: RecordFilterConfig): Promise<RecordFilterConfig>;
   // SSL Decrypt list
   sslListGet(): Promise<SslDecryptConfig>;
   sslListSet(cfg: SslDecryptConfig): Promise<SslDecryptConfig>;

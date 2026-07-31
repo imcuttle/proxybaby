@@ -27,6 +27,7 @@ import type { PluginManager } from '../engine/plugins';
 import { setBreakpointRuntime } from '../engine/operators';
 import type { BreakpointController } from '../engine/breakpoint';
 import { getSslListStore } from '../engine/ssl-list';
+import { getRecordFilterStore } from '../engine/record-filter';
 import { getUpstreamProxy } from '../engine/upstream-proxy';
 import type {
   Flow,
@@ -160,6 +161,18 @@ export class ProxyServer extends EventEmitter {
   private async onRequest(req: IncomingMessage, res: ServerResponse, isTLS: boolean) {
     if (!this.recording) {
       return this.passthrough(req, res, isTLS);
+    }
+
+    // 抓包过滤（record filter）：命中"不记录"就走 passthrough——请求正常代理，但不进 flow store。
+    // 对 HTTP 和 HTTPS 都生效（HTTPS 走到这里意味着 CONNECT 已经决定 MITM）。
+    const recStore = getRecordFilterStore();
+    if (recStore) {
+      const host = String(req.headers.host || '').split(':')[0];
+      const url = `${isTLS ? 'https' : 'http'}://${host}${req.url || ''}`;
+      // appName 在这里可能拿不到（HTTP 明文没走 CONNECT），保守传 undefined
+      if (!recStore.shouldRecord({ host, url })) {
+        return this.passthrough(req, res, isTLS);
+      }
     }
 
     const flow = this.buildFlow(req, isTLS);
@@ -536,6 +549,15 @@ export class ProxyServer extends EventEmitter {
     if (!this.recording) {
       return this.passthroughUpgrade(req, clientSocket, head, isTLS);
     }
+    // 抓包过滤同样作用于 WebSocket
+    const recStore = getRecordFilterStore();
+    if (recStore) {
+      const host = String(req.headers.host || '').split(':')[0];
+      const url = `${isTLS ? 'wss' : 'ws'}://${host}${req.url || ''}`;
+      if (!recStore.shouldRecord({ host, url })) {
+        return this.passthroughUpgrade(req, clientSocket, head, isTLS);
+      }
+    }
 
     const flow = this.buildFlow(req, isTLS);
     flow.isWebSocket = true;
@@ -652,15 +674,19 @@ export class ProxyServer extends EventEmitter {
     }
     // 用户禁用了此 host 的 MITM：直连隧道，不解密
     const sslList = getSslListStore();
+    const recStore = getRecordFilterStore();
     let appName: string | undefined;
     const remotePort = clientSocket.remotePort;
-    if (remotePort && sslList) {
+    if (remotePort && (sslList || recStore)) {
       // 关键路径不阻塞：只读缓存；未命中就按 host 判断（99% 场景够用），
       // 同时后台触发一次 lookup 补缓存，供后续同端口连接命中。
       appName = lookupByPortCached(remotePort)?.name;
       if (!appName) lookupByPort(remotePort).catch(() => {});
     }
-    const bypassMitm = this.mitmDisabledHosts.has(host) || (sslList && !sslList.shouldDecrypt({ host, appName }));
+    const bypassMitm =
+      this.mitmDisabledHosts.has(host) ||
+      (sslList && !sslList.shouldDecrypt({ host, appName })) ||
+      (recStore && !recStore.shouldDecrypt({ host, appName }));
     if (bypassMitm) {
       try {
         const upstream = net.connect(port, host, () => {

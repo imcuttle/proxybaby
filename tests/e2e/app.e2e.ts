@@ -281,8 +281,10 @@ async function resetFilters() {
     const anyWin = window as any;
     if (anyWin.__pbStore?.getState) {
       anyWin.__pbStore.getState().resetFilter();
-      anyWin.__pbStore.setState({ selectedIds: {}, selectedId: null });
+      anyWin.__pbStore.setState({ selectedIds: {}, selectedId: null, pinnedHosts: {}, pinnedPaths: {}, pinnedIds: {} });
     }
+    try { localStorage.removeItem('proxybaby:pinned-hosts'); } catch {}
+    try { localStorage.removeItem('proxybaby:pinned-paths'); } catch {}
   });
   const bar = page.getByTestId('searchbar-input');
   if (!(await bar.isVisible().catch(() => false))) {
@@ -427,9 +429,9 @@ test('侧栏右键：置顶此域名 → 出现在收藏夹已置顶分组', asy
   // 侧栏"已置顶"计数应该 > 0（api.demo.com 下至少有 1 条 flow）
   const pinnedHeader = page.locator('[data-testid="pinned-tree-header"]');
   await expect(pinnedHeader).toContainText(/[1-9]/);
-  // tree 展开后应该看到 host 子节点
-  const hostChild = page.locator('[data-testid="pinned-host-row"][data-host="api.demo.com"]');
-  await expect(hostChild).toBeVisible();
+  // tree 展开后应该看到 api.demo.com 的 host 子节点（复用 HostItem 组件，
+  // 侧栏里同时会有两个 host-row：正常"域名"分组 + 已置顶 tree 下的）
+  await expect(page.locator('[data-testid="host-row"][data-host="api.demo.com"]')).toHaveCount(2);
 });
 
 test('侧栏右键：快速规则 → 禁止访问，生成临时规则', async () => {

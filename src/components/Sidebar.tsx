@@ -104,7 +104,14 @@ export function Sidebar() {
   const pinnedTree = useMemo(() => {
     const appList = Object.keys(pinnedApps).map((name) => {
       const meta = apps.find(([n]) => n === name)?.[1];
-      return { name, count: meta?.count ?? 0, iconDataUrl: meta?.iconDataUrl };
+      return {
+        name,
+        count: meta?.count ?? 0,
+        iconDataUrl: meta?.iconDataUrl,
+        hosts: meta?.hosts ?? new Set<string>(),
+        flowIds: meta?.flowIds ?? [],
+        bundlePath: meta?.bundlePath,
+      };
     });
     const hostList = Object.keys(pinnedHosts).map((host) => {
       const paths = Object.keys(pinnedPaths)
@@ -289,9 +296,29 @@ export function Sidebar() {
             active={filter.special === 'pinned'}
             filter={filter}
             setFilter={setFilter}
+            subpaths={subpaths}
+            mitmDisabledHosts={mitmDisabledHosts}
+            quickRulePresets={quickRulePresets}
+            pinnedApps={pinnedApps}
+            pinnedHosts={pinnedHosts}
+            pinnedPaths={pinnedPaths}
+            q={q}
             onTogglePinApp={togglePinApp}
             onTogglePinHost={togglePinHost}
             onTogglePinPath={togglePinPath}
+            onToggleMitmForApp={(hostSet) => toggleMitmForApp(hostSet)}
+            onToggleMitmHost={(host) => {
+              const cur = !!mitmDisabledHosts[host];
+              toggleMitmDisabledHost(host);
+              window.proxybaby.mitmDisableHost(host, !cur);
+            }}
+            onAlphaSort={() => setAlphaSort((v) => !v)}
+            onRevealApp={(bundlePath) => revealInFinder(bundlePath)}
+            onDeleteApp={(name, ids) => deleteAppFlows(name, ids)}
+            onDeleteHost={(host, prefix) => deleteHostFlows(host, prefix)}
+            onAddRecord={(kind, value, mode) => addToRecordFilter(kind, value, mode)}
+            onApplyQuickRule={applyQuickRule}
+            onOpenCustomRule={openCustomRule}
           />
           <Item
             icon={<Bookmark size={12} />}
@@ -774,32 +801,65 @@ function QuickRuleSubMenu({
   );
 }
 
+
 function PinnedTree({
   pinCount,
   tree,
   active,
   filter,
   setFilter,
+  subpaths,
+  mitmDisabledHosts,
+  quickRulePresets,
+  pinnedApps,
+  pinnedHosts,
+  pinnedPaths,
+  q,
   onTogglePinApp,
   onTogglePinHost,
   onTogglePinPath,
+  onToggleMitmForApp,
+  onToggleMitmHost,
+  onAlphaSort,
+  onRevealApp,
+  onDeleteApp,
+  onDeleteHost,
+  onAddRecord,
+  onApplyQuickRule,
+  onOpenCustomRule,
 }: {
   pinCount: number;
   tree: {
-    appList: { name: string; count: number; iconDataUrl?: string }[];
+    appList: { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string }[];
     hostList: { host: string; count: number; paths: { full: string; seg: string }[] }[];
     orphanPaths: { full: string; host: string; seg: string }[];
   };
   active: boolean;
   filter: { special?: 'pinned' | 'saved'; host?: string; appName?: string; pathPrefix?: string };
-  setFilter: (patch: Partial<{ special?: 'pinned' | 'saved'; host?: string; appName?: string; pathPrefix?: string }>) => void;
+  setFilter: (patch: any) => void;
+  subpaths: Map<string, Map<string, number>>;
+  mitmDisabledHosts: Record<string, true>;
+  quickRulePresets: QuickRulePreset[];
+  pinnedApps: Record<string, true>;
+  pinnedHosts: Record<string, true>;
+  pinnedPaths: Record<string, true>;
+  q: string;
   onTogglePinApp: (name: string) => void;
   onTogglePinHost: (host: string) => void;
   onTogglePinPath: (prefix: string) => void;
+  onToggleMitmForApp: (hosts: Set<string>) => void;
+  onToggleMitmHost: (host: string) => void;
+  onAlphaSort: () => void;
+  onRevealApp: (bundlePath?: string) => void;
+  onDeleteApp: (name: string, flowIds: string[]) => void;
+  onDeleteHost: (host: string, prefix?: string) => void;
+  onAddRecord: (kind: FilterKind, value: string, mode: 'include' | 'exclude') => void;
+  onApplyQuickRule: (pattern: string, preset: QuickRulePreset) => void;
+  onOpenCustomRule: (pattern: string) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const [openApp, setOpenApp] = useState<Record<string, boolean>>({});
   const empty = tree.appList.length === 0 && tree.hostList.length === 0 && tree.orphanPaths.length === 0;
-  const [openHost, setOpenHost] = useState<Record<string, boolean>>({});
 
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
@@ -839,151 +899,140 @@ function PinnedTree({
       <Collapsible.Content>
         {tree.appList.map((a) => {
           const isActive = filter.appName === a.name;
+          const allHostsMitmDisabled = [...a.hosts].length > 0 && [...a.hosts].every((h) => mitmDisabledHosts[h]);
+          const isOpen = openApp[a.name] ?? true;
+          const hostList = [...a.hosts];
           return (
-            <div
-              key={`app:${a.name}`}
-              data-testid={`pinned-app-row`}
-              data-app={a.name}
-              onClick={() =>
-                setFilter({
-                  appName: isActive ? undefined : a.name,
-                  host: undefined,
-                  pathPrefix: undefined,
-                  special: isActive ? undefined : filter.special,
-                })
-              }
-              onContextMenu={(e) => {
-                e.preventDefault();
-                onTogglePinApp(a.name);
-              }}
-              className={cn(
-                'w-full flex items-center gap-1.5 pl-8 pr-2 py-1 text-sm cursor-default select-none',
-                isActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
-              )}
-              title="右键取消置顶"
-            >
-              {a.iconDataUrl ? (
-                <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
-              ) : (
-                <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
-              )}
-              <span className="flex-1 truncate text-left">{a.name}</span>
-              <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
-            </div>
-          );
-        })}
-        {tree.hostList.map((h) => {
-          const isActive = filter.host === h.host && !filter.pathPrefix;
-          const hostOpen = openHost[h.host] ?? true;
-          const hasPaths = h.paths.length > 0;
-          return (
-            <div key={`host:${h.host}`}>
-              <div
-                data-testid="pinned-host-row"
-                data-host={h.host}
-                className={cn(
-                  'w-full flex items-center gap-1 pl-6 pr-2 py-1 text-sm cursor-default select-none',
-                  isActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
-                )}
+            <div key={`pinned-app:${a.name}`}>
+              <AppContextMenu
+                name={a.name}
+                pinned={!!pinnedApps[a.name]}
+                sslDisabled={allHostsMitmDisabled}
+                onPin={() => onTogglePinApp(a.name)}
+                onToggleSsl={() => onToggleMitmForApp(a.hosts)}
+                onAlphaSort={onAlphaSort}
+                onReveal={() => onRevealApp(a.bundlePath)}
+                onDelete={() => onDeleteApp(a.name, a.flowIds)}
+                onAddToList={(mode) => onAddRecord('app', a.name, mode)}
               >
-                <button
-                  className={cn('p-0.5 rounded', isActive ? 'text-white' : 'text-pb-muted')}
-                  disabled={!hasPaths}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenHost((s) => ({ ...s, [h.host]: !hostOpen }));
-                  }}
-                >
-                  {!hasPaths ? <span className="inline-block w-3" /> : hostOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                </button>
                 <div
-                  className="flex-1 flex items-center gap-1.5 min-w-0"
-                  onClick={() =>
-                    setFilter({
-                      host: isActive ? undefined : h.host,
-                      pathPrefix: undefined,
-                      appName: undefined,
-                      special: isActive ? undefined : filter.special,
-                    })
-                  }
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    onTogglePinHost(h.host);
-                  }}
-                  title="右键取消置顶"
+                  data-testid="pinned-app-row"
+                  data-app={a.name}
+                  className={cn(
+                    'w-full flex items-center gap-1 pl-6 pr-2 py-1 text-sm cursor-default select-none',
+                    isActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
+                  )}
                 >
-                  <Globe size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
-                  <span className="flex-1 truncate text-left">{h.host}</span>
-                  <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{h.count}</span>
+                  <button
+                    className={cn('p-0.5 rounded', isActive ? 'text-white' : 'text-pb-muted')}
+                    disabled={hostList.length === 0}
+                    onClick={(e) => { e.stopPropagation(); setOpenApp((s) => ({ ...s, [a.name]: !isOpen })); }}
+                  >
+                    {hostList.length === 0 ? <span className="inline-block w-3" /> : isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </button>
+                  <div
+                    className="flex-1 flex items-center gap-1.5 min-w-0"
+                    onClick={() =>
+                      setFilter({
+                        appName: isActive ? undefined : a.name,
+                        host: undefined,
+                        pathPrefix: undefined,
+                        special: isActive ? undefined : filter.special,
+                      })
+                    }
+                  >
+                    {a.iconDataUrl ? (
+                      <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
+                    ) : (
+                      <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
+                    )}
+                    <span className="flex-1 truncate text-left">{a.name}</span>
+                    <Pin size={10} className={isActive ? 'text-white' : 'text-pb-accent'} />
+                    <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
+                  </div>
                 </div>
-              </div>
-              {hostOpen &&
-                h.paths.map((p) => {
-                  const pActive = filter.pathPrefix === p.full;
-                  return (
-                    <div
-                      key={`path:${p.full}`}
-                      data-testid="pinned-path-row"
-                      data-prefix={p.full}
-                      onClick={() =>
-                        setFilter({
-                          pathPrefix: pActive ? undefined : p.full,
-                          host: pActive ? undefined : h.host,
-                          appName: undefined,
-                          special: pActive ? undefined : filter.special,
-                        })
-                      }
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        onTogglePinPath(p.full);
-                      }}
-                      className={cn(
-                        'w-full flex items-center gap-1.5 pl-14 pr-2 py-1 text-xs cursor-default select-none',
-                        pActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
-                      )}
-                      title="右键取消置顶"
-                    >
-                      <span className="flex-1 truncate text-left font-mono">{p.seg}</span>
-                    </div>
-                  );
-                })}
+              </AppContextMenu>
+              {isOpen && hostList.map((host) => (
+                <div key={`pinned-app-host:${a.name}:${host}`} className="pl-4">
+                  <HostItem
+                    host={host}
+                    count={subpaths.get(host) ? [...subpaths.get(host)!.values()].reduce((a, b) => a + b, 0) : 0}
+                    subpaths={[...(subpaths.get(host)?.entries() || [])].sort((a, b) => b[1] - a[1])}
+                    filter={filter}
+                    setFilter={setFilter}
+                    query={q}
+                    sslDisabled={!!mitmDisabledHosts[host]}
+                    pinned={!!pinnedHosts[host]}
+                    onTogglePin={() => onTogglePinHost(host)}
+                    isPathPinned={(prefix) => !!pinnedPaths[prefix]}
+                    onTogglePinPath={onTogglePinPath}
+                    onToggleSsl={() => onToggleMitmHost(host)}
+                    onAddToList={(mode) => onAddRecord('host', host, mode)}
+                    onAddUrlToList={(prefix, mode) => onAddRecord('url', prefix, mode)}
+                    onDeleteHost={() => onDeleteHost(host)}
+                    onDeleteSubpath={(prefix) => onDeleteHost(host, prefix)}
+                    quickRulePresets={quickRulePresets}
+                    onApplyQuickRule={onApplyQuickRule}
+                    onOpenCustomRule={onOpenCustomRule}
+                  />
+                </div>
+              ))}
             </div>
           );
         })}
-        {tree.orphanPaths.map((p) => {
-          const pActive = filter.pathPrefix === p.full;
-          return (
-            <div
-              key={`orphan-path:${p.full}`}
-              data-testid="pinned-path-row"
-              data-prefix={p.full}
-              onClick={() =>
-                setFilter({
-                  pathPrefix: pActive ? undefined : p.full,
-                  host: pActive ? undefined : p.host,
-                  appName: undefined,
-                  special: pActive ? undefined : filter.special,
-                })
-              }
-              onContextMenu={(e) => {
-                e.preventDefault();
-                onTogglePinPath(p.full);
-              }}
-              className={cn(
-                'w-full flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs cursor-default select-none',
-                pActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
-              )}
-              title="右键取消置顶"
-            >
-              <Globe size={10} className={pActive ? 'text-white' : 'text-pb-muted'} />
-              <span className="flex-1 truncate text-left font-mono">{p.host}{p.seg}</span>
-            </div>
-          );
-        })}
+        {tree.hostList.map((h) => (
+          <HostItem
+            key={`pinned-host:${h.host}`}
+            host={h.host}
+            count={h.count}
+            subpaths={[...(subpaths.get(h.host)?.entries() || [])].sort((a, b) => b[1] - a[1])}
+            filter={filter}
+            setFilter={setFilter}
+            query={q}
+            sslDisabled={!!mitmDisabledHosts[h.host]}
+            pinned={!!pinnedHosts[h.host]}
+            onTogglePin={() => onTogglePinHost(h.host)}
+            isPathPinned={(prefix) => !!pinnedPaths[prefix]}
+            onTogglePinPath={onTogglePinPath}
+            onToggleSsl={() => onToggleMitmHost(h.host)}
+            onAddToList={(mode) => onAddRecord('host', h.host, mode)}
+            onAddUrlToList={(prefix, mode) => onAddRecord('url', prefix, mode)}
+            onDeleteHost={() => onDeleteHost(h.host)}
+            onDeleteSubpath={(prefix) => onDeleteHost(h.host, prefix)}
+            quickRulePresets={quickRulePresets}
+            onApplyQuickRule={onApplyQuickRule}
+            onOpenCustomRule={onOpenCustomRule}
+          />
+        ))}
+        {tree.orphanPaths.map((p) => (
+          <HostItem
+            key={`orphan-host:${p.host}:${p.full}`}
+            host={p.host}
+            count={subpaths.get(p.host) ? [...subpaths.get(p.host)!.values()].reduce((a, b) => a + b, 0) : 0}
+            subpaths={[...(subpaths.get(p.host)?.entries() || [])].sort((a, b) => b[1] - a[1])}
+            filter={filter}
+            setFilter={setFilter}
+            query={q}
+            sslDisabled={!!mitmDisabledHosts[p.host]}
+            pinned={!!pinnedHosts[p.host]}
+            onTogglePin={() => onTogglePinHost(p.host)}
+            isPathPinned={(prefix) => !!pinnedPaths[prefix]}
+            onTogglePinPath={onTogglePinPath}
+            onToggleSsl={() => onToggleMitmHost(p.host)}
+            onAddToList={(mode) => onAddRecord('host', p.host, mode)}
+            onAddUrlToList={(prefix, mode) => onAddRecord('url', prefix, mode)}
+            onDeleteHost={() => onDeleteHost(p.host)}
+            onDeleteSubpath={(prefix) => onDeleteHost(p.host, prefix)}
+            quickRulePresets={quickRulePresets}
+            onApplyQuickRule={onApplyQuickRule}
+            onOpenCustomRule={onOpenCustomRule}
+          />
+        ))}
       </Collapsible.Content>
     </Collapsible.Root>
   );
 }
+
 
 function Section({
   title,

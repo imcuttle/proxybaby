@@ -141,14 +141,15 @@ export function Sidebar() {
   };
 
   /**
-   * 把一条 app/host/url 快速加入 Allow 或 Block 列表。
-   * 语义：读取当前 config → 若已存在同 kind+value 则忽略；否则追加一条 enabled 的 entry。
-   * 同时把 mode 切到用户选的（'allow' / 'block'），保证"加了就立刻生效"。
-   * URL kind 默认按 glob 前缀（`prefix*`）匹配。
+   * 把一条 app/host/url 快速加入 SSL 代理列表（"过滤配置 → SSL 代理列表"）。
+   * 语义：这是**抓包与否**的过滤，不是"禁止访问"：
+   *   - mode='include' → SSL 列表切到"仅命中项 MITM"，其他域走透传（能访问，只是不抓包解密）
+   *   - mode='exclude' → SSL 列表切到"命中项不 MITM"，其他域正常抓包
+   * 已存在同 kind+value 时不重复追加。URL kind 默认按 glob 前缀（`prefix*`）匹配，仅在请求命中后生效。
    */
-  const addToAllowBlockList = async (kind: FilterKind, value: string, mode: 'allow' | 'block') => {
+  const addToSslList = async (kind: FilterKind, value: string, mode: 'include' | 'exclude') => {
     try {
-      const cur = await window.proxybaby.allowBlockGet();
+      const cur = await window.proxybaby.sslListGet();
       const val = kind === 'url' ? (value.endsWith('*') ? value : `${value}*`) : value;
       const exists = cur.entries.some((e) => e.kind === kind && e.value === val);
       const entries: FilterEntry[] = exists
@@ -159,7 +160,7 @@ export function Sidebar() {
               kind, value: val, enabled: true,
               ...(kind === 'url' ? { urlMode: 'glob' as const } : {}) },
           ];
-      await window.proxybaby.allowBlockSet({ mode, entries });
+      await window.proxybaby.sslListSet({ enabled: true, mode, entries });
     } catch {}
   };
 
@@ -209,7 +210,7 @@ export function Sidebar() {
                 onAlphaSort={() => setAlphaSort((v) => !v)}
                 onReveal={() => revealInFinder(meta.bundlePath)}
                 onDelete={() => deleteAppFlows(name, meta.flowIds)}
-                onAddToList={(mode) => addToAllowBlockList('app', name, mode)}
+                onAddToList={(mode) => addToSslList('app', name, mode)}
               >
                 <Item
                   icon={meta.iconDataUrl
@@ -246,8 +247,8 @@ export function Sidebar() {
                 toggleMitmDisabledHost(host);
                 window.proxybaby.mitmDisableHost(host, !cur);
               }}
-              onAddToList={(mode) => addToAllowBlockList('host', host, mode)}
-              onAddUrlToList={(prefix, mode) => addToAllowBlockList('url', prefix, mode)}
+              onAddToList={(mode) => addToSslList('host', host, mode)}
+              onAddUrlToList={(prefix, mode) => addToSslList('url', prefix, mode)}
               onDeleteHost={() => deleteHostFlows(host)}
               onDeleteSubpath={(prefix) => deleteHostFlows(host, prefix)}
             />
@@ -281,7 +282,7 @@ function AppContextMenu({
   onAlphaSort: () => void;
   onReveal: () => void;
   onDelete: () => void;
-  onAddToList: (mode: 'allow' | 'block') => void;
+  onAddToList: (mode: 'include' | 'exclude') => void;
   children: React.ReactNode;
 }) {
   const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
@@ -307,11 +308,11 @@ function AppContextMenu({
           </ContextMenu.Item>
 
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
-            <span className="flex-1">加入允许列表</span>
+          <ContextMenu.Item onSelect={() => onAddToList('include')} className={itemCls}>
+            <span className="flex-1">仅抓取此应用（加入 SSL 包含列表）</span>
           </ContextMenu.Item>
-          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
-            <span className="flex-1">加入阻止列表</span>
+          <ContextMenu.Item onSelect={() => onAddToList('exclude')} className={itemCls}>
+            <span className="flex-1">抓包时排除此应用（加入 SSL 排除列表）</span>
           </ContextMenu.Item>
 
           <ContextMenu.Sub>
@@ -379,8 +380,8 @@ function HostItem({
   query?: string;
   sslDisabled: boolean;
   onToggleSsl: () => void;
-  onAddToList: (mode: 'allow' | 'block') => void;
-  onAddUrlToList: (prefix: string, mode: 'allow' | 'block') => void;
+  onAddToList: (mode: 'include' | 'exclude') => void;
+  onAddUrlToList: (prefix: string, mode: 'include' | 'exclude') => void;
   onDeleteHost: () => void;
   onDeleteSubpath: (prefix: string) => void;
 }) {
@@ -401,22 +402,26 @@ function HostItem({
         onDelete={onDeleteHost}
       >
         <div
+          data-testid="host-row"
+          data-host={host}
           className={cn(
             'w-full flex items-center gap-1 pl-4 pr-2 py-1 text-sm cursor-default',
             // 选中项 hover 时也保持蓝底：把 hover 灰底只应用在未选中项
             hostActive ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
           )}
+          onClick={() => setFilter({ host: filter.host === host && !filter.pathPrefix ? undefined : host, pathPrefix: undefined, appName: undefined, special: undefined })}
         >
-          <button onClick={() => setOpen((o) => !o)} className="text-pb-muted shrink-0">
-            {subpaths.length > 1 ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />) : <span className="inline-block w-[11px]" />}
-          </button>
-          <Globe size={12} className={cn('shrink-0', hostActive ? 'text-white' : 'text-pb-muted')} />
-          <button
-            className="flex-1 truncate text-left"
-            onClick={() => setFilter({ host: filter.host === host && !filter.pathPrefix ? undefined : host, pathPrefix: undefined, appName: undefined, special: undefined })}
+          <span
+            role="button"
+            onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+            className="text-pb-muted shrink-0 cursor-default"
           >
+            {subpaths.length > 1 ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />) : <span className="inline-block w-[11px]" />}
+          </span>
+          <Globe size={12} className={cn('shrink-0', hostActive ? 'text-white' : 'text-pb-muted')} />
+          <span className="flex-1 truncate text-left">
             <Highlight text={host} query={query} />
-          </button>
+          </span>
           <span className={cn('text-xs', hostActive ? 'text-white/80' : 'text-pb-muted')}>{count}</span>
         </div>
       </HostContextMenu>
@@ -462,7 +467,7 @@ function HostContextMenu({
   host: string;
   sslDisabled: boolean;
   onToggleSsl: () => void;
-  onAddToList: (mode: 'allow' | 'block') => void;
+  onAddToList: (mode: 'include' | 'exclude') => void;
   onDelete: () => void;
   children: React.ReactNode;
 }) {
@@ -472,7 +477,7 @@ function HostContextMenu({
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className="min-w-[200px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
+        <ContextMenu.Content className="min-w-[220px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
           <ContextMenu.Item onSelect={onToggleSsl} className={itemCls}>
             <span className="flex-1">{sslDisabled ? '启用 SSL 代理' : '禁用 SSL 代理'}</span>
           </ContextMenu.Item>
@@ -480,11 +485,11 @@ function HostContextMenu({
             <span className="flex-1">复制域名</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
-            <span className="flex-1">加入允许列表</span>
+          <ContextMenu.Item onSelect={() => onAddToList('include')} className={itemCls}>
+            <span className="flex-1">仅抓取此域名（加入 SSL 包含列表）</span>
           </ContextMenu.Item>
-          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
-            <span className="flex-1">加入阻止列表</span>
+          <ContextMenu.Item onSelect={() => onAddToList('exclude')} className={itemCls}>
+            <span className="flex-1">抓包时排除此域名（加入 SSL 排除列表）</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>
@@ -504,7 +509,7 @@ function SubpathContextMenu({
   children,
 }: {
   prefix: string;
-  onAddToList: (mode: 'allow' | 'block') => void;
+  onAddToList: (mode: 'include' | 'exclude') => void;
   onDelete: () => void;
   children: React.ReactNode;
 }) {
@@ -514,16 +519,16 @@ function SubpathContextMenu({
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className="min-w-[200px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
+        <ContextMenu.Content className="min-w-[220px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
           <ContextMenu.Item onSelect={() => navigator.clipboard?.writeText(prefix).catch(() => {})} className={itemCls}>
             <span className="flex-1">复制 URL 前缀</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item onSelect={() => onAddToList('allow')} className={itemCls}>
-            <span className="flex-1">加入允许列表（URL）</span>
+          <ContextMenu.Item onSelect={() => onAddToList('include')} className={itemCls}>
+            <span className="flex-1">仅抓取此路径（加入 SSL 包含列表）</span>
           </ContextMenu.Item>
-          <ContextMenu.Item onSelect={() => onAddToList('block')} className={itemCls}>
-            <span className="flex-1">加入阻止列表（URL）</span>
+          <ContextMenu.Item onSelect={() => onAddToList('exclude')} className={itemCls}>
+            <span className="flex-1">抓包时排除此路径（加入 SSL 排除列表）</span>
           </ContextMenu.Item>
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={onDelete} className={destructiveCls}>

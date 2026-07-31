@@ -377,6 +377,37 @@ test('域名 subpath 过滤', async () => {
   await page.getByText('api.demo.com', { exact: true }).first().click(); // 取消
 });
 
+test('侧栏右键：将域名加入 SSL 排除列表（不抓包解密）', async () => {
+  await resetFilters();
+  // 先清空当前 SSL 配置，避免脏数据
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.sslListSet({ enabled: true, mode: 'all', entries: [] });
+  });
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
+  await expect(hostRow).toBeVisible();
+  await hostRow.click({ button: 'right' });
+  await page.getByText(/抓包时排除此域名/).click();
+  const cfg = await page.evaluate(async () => await (window as any).proxybaby.sslListGet());
+  expect(cfg.mode).toBe('exclude');
+  expect(cfg.entries.some((e: any) => e.kind === 'host' && e.value === 'api.demo.com')).toBe(true);
+});
+
+test('侧栏选中项 hover 时保持蓝色底（不被 hover 灰色覆盖）', async () => {
+  await resetFilters();
+  const hostRow = page.getByText('api.demo.com', { exact: true }).first();
+  // 选中该域名
+  await hostRow.click();
+  // 目标：hover 时行背景仍是选中蓝（#094771），而不是灰色 hover（#333）
+  // 找承载 bg-pb-selected 的父级 div
+  const parent = hostRow.locator('xpath=ancestor::div[contains(@class,"bg-pb-selected")][1]');
+  await parent.hover();
+  const bg = await parent.evaluate((el) => getComputedStyle(el as HTMLElement).backgroundColor);
+  // rgb(9, 71, 113) === #094771
+  expect(bg).toBe('rgb(9, 71, 113)');
+  // 取消选中，恢复现场
+  await hostRow.click();
+});
+
 test('pin 后已固定过滤', async () => {
   await resetFilters();
   // pin f-http

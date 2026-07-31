@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Trash2, Filter, Crosshair, Search, X, Plus, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Trash2, Filter, Crosshair, Search, X, Plus, AlertTriangle, Wifi, WifiOff, Radio, Pause } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { matchFilter } from '../lib/filter';
 
@@ -39,7 +39,11 @@ export function StatusBar() {
   const [showHelp, setShowHelp] = useState(false);
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [proxyOpen, setProxyOpen] = useState(false);
+  const [proxyBusy, setProxyBusy] = useState(false);
   const overrideRef = useRef<HTMLDivElement>(null);
+  const proxyRef = useRef<HTMLDivElement>(null);
+  const proxyStatus = useFlowStore((s) => s.proxyStatus);
 
   // 点击外部或 Esc 关闭覆盖 popover
   useEffect(() => {
@@ -57,6 +61,40 @@ export function StatusBar() {
       document.removeEventListener('keydown', onKey);
     };
   }, [overrideOpen]);
+
+  // 点击外部或 Esc 关闭代理状态 popover
+  useEffect(() => {
+    if (!proxyOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (proxyRef.current && !proxyRef.current.contains(e.target as Node)) {
+        setProxyOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setProxyOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [proxyOpen]);
+
+  const toggleSystemProxy = async () => {
+    if (!proxyStatus) return;
+    setProxyBusy(true);
+    try {
+      const s = await window.proxybaby.setSystemProxy(!proxyStatus.systemProxyApplied);
+      if (s) setProxyStatus(s);
+    } finally { setProxyBusy(false); }
+  };
+  const toggleRecording = async () => {
+    if (!proxyStatus) return;
+    setProxyBusy(true);
+    try {
+      const s = await window.proxybaby.toggleRecording(!proxyStatus.recording);
+      if (s) setProxyStatus(s);
+    } finally { setProxyBusy(false); }
+  };
 
   const switchBack = async () => {
     setSwitching(true);
@@ -194,6 +232,74 @@ export function StatusBar() {
                 {cert.trusted ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
                 证书 {cert.trusted ? '已信任' : '未信任'}
               </span>
+            )}
+            {/* 代理状态：点击弹出开关面板 */}
+            {proxyStatus && (
+              <div className="relative" ref={proxyRef}>
+                <button
+                  data-testid="proxy-status-btn"
+                  data-open={proxyOpen ? 'true' : 'false'}
+                  data-running={proxyStatus.running ? 'true' : 'false'}
+                  data-system={proxyStatus.systemProxyApplied ? 'true' : 'false'}
+                  data-recording={proxyStatus.recording ? 'true' : 'false'}
+                  onClick={() => setProxyOpen((v) => !v)}
+                  className={cn(
+                    'pb-btn px-2 py-0.5 flex items-center gap-1',
+                    proxyStatus.systemProxyApplied ? 'text-pb-success' : 'text-pb-muted',
+                  )}
+                  title={`本地 ${proxyStatus.host}:${proxyStatus.port} · 系统代理${proxyStatus.systemProxyApplied ? '已开' : '已关'} · ${proxyStatus.recording ? '抓包中' : '已暂停'}`}
+                >
+                  {proxyStatus.systemProxyApplied ? <Wifi size={12} /> : <WifiOff size={12} />}
+                  代理 {proxyStatus.host}:{proxyStatus.port}
+                  <span className="text-pb-muted">·</span>
+                  {proxyStatus.recording
+                    ? <Radio size={12} className="text-pb-accent" />
+                    : <Pause size={12} className="text-pb-muted" />
+                  }
+                </button>
+                {proxyOpen && (
+                  <div
+                    data-testid="proxy-status-popover"
+                    className="absolute z-50 bottom-7 right-0 w-72 rounded-lg border border-pb-border bg-pb-panel shadow-2xl p-3 text-xs text-pb-text"
+                  >
+                    <div className="font-medium mb-2 flex items-center gap-1.5">
+                      <Wifi size={12} className="text-pb-accent" /> 代理状态
+                    </div>
+                    <div className="space-y-1 text-pb-muted">
+                      <Row k="监听" v={<span className="font-mono text-pb-text">{proxyStatus.host}:{proxyStatus.port}</span>} />
+                      <Row k="引擎" v={<span className={proxyStatus.running ? 'text-pb-success' : 'text-pb-warn'}>{proxyStatus.running ? '运行中' : '已停止'}</span>} />
+                      <Row k="系统代理" v={<span className={proxyStatus.systemProxyApplied ? 'text-pb-success' : 'text-pb-muted'}>{proxyStatus.systemProxyApplied ? '已开启' : '已关闭'}</span>} />
+                      <Row k="抓包" v={<span className={proxyStatus.recording ? 'text-pb-accent' : 'text-pb-muted'}>{proxyStatus.recording ? '录制中' : '已暂停'}</span>} />
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        data-testid="proxy-toggle-system"
+                        onClick={toggleSystemProxy}
+                        disabled={proxyBusy}
+                        className={cn(
+                          'pb-btn px-2 py-0.5 flex items-center gap-1',
+                          proxyStatus.systemProxyApplied ? 'bg-pb-warn/20 text-pb-warn' : 'bg-pb-accent/20 text-pb-accent',
+                        )}
+                      >
+                        {proxyStatus.systemProxyApplied ? <WifiOff size={12} /> : <Wifi size={12} />}
+                        {proxyStatus.systemProxyApplied ? '关闭系统代理' : '开启系统代理'}
+                      </button>
+                      <button
+                        data-testid="proxy-toggle-record"
+                        onClick={toggleRecording}
+                        disabled={proxyBusy}
+                        className={cn(
+                          'pb-btn px-2 py-0.5 flex items-center gap-1',
+                          proxyStatus.recording ? 'bg-pb-warn/20 text-pb-warn' : 'bg-pb-accent/20 text-pb-accent',
+                        )}
+                      >
+                        {proxyStatus.recording ? <Pause size={12} /> : <Radio size={12} />}
+                        {proxyStatus.recording ? '暂停抓包' : '开始抓包'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
             {systemProxyOverride && (
               <div className="relative" ref={overrideRef}>

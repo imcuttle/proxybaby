@@ -1,5 +1,22 @@
 # proxybaby
 
+## 0.3.0
+
+### 新特性
+
+- **抓包过滤（Record Filter）独立于 SSL 列表**：新增独立的"哪些请求进 UI 列表"过滤（all / include / exclude），对 HTTP + HTTPS 都生效，命中项不显示但依然会正常代理到上游。
+- **每条目 SSL 解密开关**：在录制过滤条目上直接勾选是否解密，CONNECT 阶段命中 `decrypt=false` 的条目会走隧道直通，不再 MITM。
+- **侧栏右键菜单语义修正**：`仅抓取此 App/域名` / `抓包时排除此 App/域名` 现在写入 record-filter（include / exclude），不会像旧版那样把请求 abort 掉。
+
+### 修复
+
+- `upgradeToEntries` 迁移时未保留 `decrypt` 字段，导致老配置升级后 per-entry SSL 决策失效。
+
+### 测试
+
+- 新增 `tests/unit/record-filter.test.ts`（11 个用例覆盖 shouldRecord / shouldDecrypt / URL glob / disabled）。
+- 更新 e2e：`过滤配置窗口：录制过滤添加 App 维度条目`、`侧栏右键：将域名加入抓包排除/包含列表（record-filter）`。
+
 ## 0.2.0
 
 ### ✨ 新功能
@@ -14,7 +31,7 @@
 
 - chore(release): `/release` 命令全流程自动化，前置检查通过后无中间确认直接 bump + tag + push (`99611db`)
 
-## 0.1.0
+## ## 0.1.0
 
 首次发布 🎉
 

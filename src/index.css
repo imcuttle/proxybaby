@@ -72,11 +72,21 @@
 }
 
 /*
- * Radix Popper 兜底：Content 内部 `data-side` 只在 useLayoutEffect 定位完成后写入。
- * 未完成时把 Content 隐藏，避免右键菜单 / Popover 首帧闪现在左上角/其他位置。
- * 参考 https://github.com/radix-ui/primitives/issues/1927
+ * Radix Popper 兜底：Content 需要 useLayoutEffect 完成测量才有正确位置，
+ * 首帧可能出现在 (0,0) / 屏外初值。这里做两层保险：
+ * 1) Content 上没写入 data-side（尚未定位完成）时透明；
+ * 2) 用 open-state 触发一次极短的 fade-in（10ms），让即便同一帧内 data-side
+ *    已存在但 transform 尚未 apply 的场景也被吃掉。
  */
 [data-radix-popper-content-wrapper] > *:not([data-side]) {
   opacity: 0 !important;
   pointer-events: none !important;
+}
+
+@keyframes pb-popper-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+[data-radix-popper-content-wrapper] > [data-state='open'][data-side] {
+  animation: pb-popper-fade-in 10ms linear;
 }

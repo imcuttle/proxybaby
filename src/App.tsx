@@ -13,6 +13,7 @@ import { SettingsView } from './components/SettingsView';
 import { FilterConfigView } from './components/filter-config/FilterConfigView';
 import { FilterEntryEditorView } from './components/filter-config/FilterEntryEditorView';
 import { RuleQuickInputView } from './windows/RuleQuickInputView';
+import { AiSessionView } from './windows/AiSessionView';
 import { ComposerView } from './components/ComposerView';
 import { DiffModal } from './components/DiffModal';
 import { BreakpointModal } from './components/BreakpointModal';
@@ -24,8 +25,8 @@ import { Sparkles, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { Flow } from '../shared/types';
 
 /** 根据 hash 判断当前渲染的是主窗口还是子窗口。 */
-type RouteName = 'main' | 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input';
-const CHILD_ROUTES: readonly RouteName[] = ['settings', 'diff', 'filter-config', 'filter-entry-editor', 'rule-quick-input'] as const;
+type RouteName = 'main' | 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input' | 'ai-session';
+const CHILD_ROUTES: readonly RouteName[] = ['settings', 'diff', 'filter-config', 'filter-entry-editor', 'rule-quick-input', 'ai-session'] as const;
 
 function useRoute(): RouteName {
   const parse = (): RouteName => {
@@ -48,6 +49,7 @@ export function App() {
   if (route === 'filter-config') return <FilterConfigWindow />;
   if (route === 'filter-entry-editor') return <FilterEntryEditorWindow />;
   if (route === 'rule-quick-input') return <RuleQuickInputWindow />;
+  if (route === 'ai-session') return <AiSessionView />;
   return <MainWindow />;
 }
 
@@ -245,10 +247,18 @@ function MainWindow() {
     const offAi5 = api.onEvent('ai:tool-result' as any, (p: any) => useAiStore.getState().onToolResult(p.sessionId, p.messageId, p.toolCallId, p.result, p.error));
     const offAi6 = api.onEvent('ai:message-end' as any, (p: any) => useAiStore.getState().onMessageEnd(p.sessionId, p.messageId));
     const offAi7 = api.onEvent('ai:error' as any, (p: any) => useAiStore.getState().onError(p.sessionId, p.error));
+    // AI Sessions 子窗口 → 主窗口联动：选中并滚动到对应 flow
+    const offAiSess = api.onEvent('ai-session:select-flow' as any, (p: any) => {
+      if (!p?.id) return;
+      const s = useFlowStore.getState();
+      s.setSelected(p.id);
+      s.requestScrollTo(p.id);
+    });
     return () => {
       off1(); off2(); off3(); off4(); offWs(); off5(); off6(); off7(); off8(); offBp();
       offTraffic(); offRemove(); offOverride(); offAppInfo();
       offAi1(); offAi2(); offAi3(); offAi4(); offAi5(); offAi6(); offAi7();
+      offAiSess();
     };
   }, [
     hydrate,

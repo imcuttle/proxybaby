@@ -84,6 +84,8 @@ interface FlowState {
   byId: Record<string, Flow>;
   selectedId: string | null;                    // 主选中（anchor / DetailPane 展示）
   selectedIds: Record<string, true>;            // 多选集合（含主选）
+  /** 触发外部（跨窗口）选中时，同时设这个值请求 RequestList 滚动到位；消费后置回 null。 */
+  scrollTargetId: string | null;
   filter: FilterState;
   pinnedIds: Record<string, true>;
   /** 按 host 置顶：该 host 的所有 flow 在列表里排到前面（持久化） */
@@ -115,11 +117,15 @@ interface FlowState {
   toggleSelected(id: string): void;                            // Cmd/Ctrl+Click
   rangeSelect(id: string, orderedIds: string[]): void;          // Shift+Click
   clearSelection(): void;
+  /** 请求 RequestList 把某条 flow 滚动到可视区（跨窗口联动用） */
+  requestScrollTo(id: string | null): void;
   setFilter(patch: Partial<FilterState>): void;
   resetFilter(): void;
   togglePin(id: string): void;
   togglePinHost(host: string): void;
   togglePinPath(prefix: string): void;
+  /** 清空某 host 的所有置顶（host + 其下 subpath），统一"取消置顶" */
+  unpinHostAll(host: string): void;
   toggleSave(id: string): void;
   setNote(id: string, note: string): void;
   setHighlight(id: string, color: string | null): void;
@@ -258,6 +264,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   byId: {},
   selectedId: null,
   selectedIds: {},
+  scrollTargetId: null,
   filter: { ...DEFAULT_FILTER },
   pinnedIds: {},
   pinnedHosts: loadStringSet(LS_KEY_PINNED_HOSTS),
@@ -315,6 +322,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     return { selectedIds: next, selectedId: id };
   }),
   clearSelection: () => set({ selectedIds: {}, selectedId: null }),
+  requestScrollTo: (id) => set({ scrollTargetId: id }),
   setFilter: (patch) => set({ filter: { ...get().filter, ...patch } }),
   resetFilter: () => set({ filter: { ...DEFAULT_FILTER } }),
   togglePin: (id) => set((s) => {
@@ -333,6 +341,21 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     if (next[prefix]) delete next[prefix]; else next[prefix] = true;
     persistStringSet(LS_KEY_PINNED_PATHS, next);
     return { pinnedPaths: next };
+  }),
+  /** 清空某 host 的所有置顶（host 本身 + 该 host 下所有 pinnedPaths），用于"取消置顶此域名"统一动作 */
+  unpinHostAll: (host) => set((s) => {
+    const nextHosts = { ...s.pinnedHosts };
+    delete nextHosts[host];
+    const nextPaths: Record<string, true> = {};
+    for (const p of Object.keys(s.pinnedPaths)) {
+      // pinnedPaths key 形如 "host/subpath"
+      const slash = p.indexOf('/');
+      const h = slash > 0 ? p.slice(0, slash) : p;
+      if (h !== host) nextPaths[p] = true;
+    }
+    persistStringSet(LS_KEY_PINNED_HOSTS, nextHosts);
+    persistStringSet(LS_KEY_PINNED_PATHS, nextPaths);
+    return { pinnedHosts: nextHosts, pinnedPaths: nextPaths };
   }),
   toggleSave: (id) => set((s) => {
     const next = { ...s.savedIds };
@@ -484,7 +507,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const next: Flow = { ...f, app };
     replaceFlow(set, get, next);
   },
-  clear: () => set({ flows: [], byId: {}, selectedId: null, selectedIds: {} }),
+  clear: () => set({ flows: [], byId: {}, selectedId: null, selectedIds: {}, scrollTargetId: null }),
 
   setProxyStatus: (s) => set({ proxyStatus: s }),
   setCertStatus: (s) => set({ certStatus: s }),

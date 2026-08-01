@@ -381,7 +381,7 @@ function showMainWindow() {
 
 /** 通用子窗口打开：hash 路由到 App 里的独立视图（settings/diff） */
 const childWindows = new Map<string, BrowserWindow>();
-function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input', opts: { width?: number; height?: number; title?: string } = {}) {
+function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input' | 'ai-session', opts: { width?: number; height?: number; title?: string } = {}) {
   const existing = childWindows.get(route);
   if (existing && !existing.isDestroyed()) {
     existing.show();
@@ -722,7 +722,7 @@ function setupIpc() {
   });
 
   // 子窗口
-  ipcMain.handle('window:open', (_e, route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor', opts?: any) => {
+  ipcMain.handle('window:open', (_e, route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'ai-session', opts?: any) => {
     openChildWindow(route, opts || {});
     return true;
   });
@@ -780,11 +780,19 @@ function setupIpc() {
 
   // ---- Allow / Block List ----
   ipcMain.handle('allowBlock:get', () => allowBlockStore?.get() ?? { mode: 'off', entries: [] });
-  ipcMain.handle('allowBlock:set', (_e, cfg: AllowBlockConfig) => allowBlockStore?.set(cfg) ?? { mode: 'off', entries: [] });
+  ipcMain.handle('allowBlock:set', (_e, cfg: AllowBlockConfig) => {
+    const next = allowBlockStore?.set(cfg) ?? { mode: 'off', entries: [] };
+    broadcast('allowBlock:changed' as any, next);
+    return next;
+  });
 
   // ---- Record filter (决定哪些请求进 flow list) ----
   ipcMain.handle('recordFilter:get', () => recordFilterStore?.get() ?? { mode: 'all', entries: [] });
-  ipcMain.handle('recordFilter:set', (_e, cfg: any) => recordFilterStore?.set(cfg) ?? { mode: 'all', entries: [] });
+  ipcMain.handle('recordFilter:set', (_e, cfg: any) => {
+    const next = recordFilterStore?.set(cfg) ?? { mode: 'all', entries: [] };
+    broadcast('recordFilter:changed' as any, next);
+    return next;
+  });
 
   // ---- SSL Decrypt list ----
   ipcMain.handle('sslList:get', () => sslListStore?.get() ?? { enabled: true, mode: 'all', entries: [] });

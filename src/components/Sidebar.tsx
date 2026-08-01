@@ -16,6 +16,7 @@ export function Sidebar() {
   const pinnedPaths = useFlowStore((s) => s.pinnedPaths);
   const togglePinHost = useFlowStore((s) => s.togglePinHost);
   const togglePinPath = useFlowStore((s) => s.togglePinPath);
+  const unpinHostAll = useFlowStore((s) => s.unpinHostAll);
   const savedIds = useFlowStore((s) => s.savedIds);
   const removeFlow = useFlowStore((s) => s.removeFlow);
   const mitmDisabledHosts = useFlowStore((s) => s.mitmDisabledHosts);
@@ -96,6 +97,22 @@ export function Sidebar() {
     () => flows.reduce((n, f) => n + (isFlowPinned(f, { pinnedIds, pinnedHosts, pinnedPaths }) ? 1 : 0), 0),
     [flows, pinnedIds, pinnedHosts, pinnedPaths],
   );
+  // 判断某 host 在 sidebar 视角是否"已置顶"（host 本身 pin 或其任一 subpath pin）。
+  // 用户诉求：在"已置顶"树里右键任何 host 都应显示"取消置顶此域名"，且点击一次全部清除。
+  const isHostPinnedFull = useMemo(() => {
+    const set = new Set<string>();
+    for (const h of Object.keys(pinnedHosts)) set.add(h);
+    for (const p of Object.keys(pinnedPaths)) {
+      const slash = p.indexOf('/');
+      set.add(slash > 0 ? p.slice(0, slash) : p);
+    }
+    return (host: string) => set.has(host);
+  }, [pinnedHosts, pinnedPaths]);
+  /** 统一的"切换 host 置顶"：已置顶则清空（含 subpath），否则 host 加入 pinnedHosts */
+  const toggleHostPinUnified = (host: string) => {
+    if (isHostPinnedFull(host)) unpinHostAll(host);
+    else togglePinHost(host);
+  };
   const saveCount = Object.keys(savedIds).length;
 
   // Saved tree：按 savedIds 反查 flow → app / host / path 聚合（一次遍历）
@@ -333,7 +350,7 @@ export function Sidebar() {
             pinnedPaths={pinnedPaths}
             q={q}
             onTogglePinApp={togglePinApp}
-            onTogglePinHost={togglePinHost}
+            onTogglePinHost={toggleHostPinUnified}
             onTogglePinPath={togglePinPath}
             onToggleMitmForApp={(hostSet) => toggleMitmForApp(hostSet)}
             onToggleMitmHost={(host) => {
@@ -363,7 +380,7 @@ export function Sidebar() {
             pinnedPaths={pinnedPaths}
             q={q}
             onTogglePinApp={togglePinApp}
-            onTogglePinHost={togglePinHost}
+            onTogglePinHost={toggleHostPinUnified}
             onTogglePinPath={togglePinPath}
             onToggleMitmForApp={(hostSet) => toggleMitmForApp(hostSet)}
             onToggleMitmHost={(host) => {
@@ -1171,6 +1188,16 @@ function PinnedTree({
   const [open, setOpen] = useState(true);
   const [openApp, setOpenApp] = useState<Record<string, boolean>>({});
   const empty = tree.appList.length === 0 && tree.hostList.length === 0 && tree.orphanPaths.length === 0;
+  // 与顶层 isHostPinnedFull 一致：host 本身 pin 或其 subpath pin 都算已置顶
+  const isHostPinnedFull = (host: string): boolean => {
+    if (pinnedHosts[host]) return true;
+    for (const p of Object.keys(pinnedPaths)) {
+      const slash = p.indexOf('/');
+      const h = slash > 0 ? p.slice(0, slash) : p;
+      if (h === host) return true;
+    }
+    return false;
+  };
 
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
@@ -1273,7 +1300,7 @@ function PinnedTree({
                     setFilter={setFilter}
                     query={q}
                     sslDisabled={!!mitmDisabledHosts[host]}
-                    pinned={!!pinnedHosts[host]}
+                    pinned={isHostPinnedFull(host)}
                     onTogglePin={() => onTogglePinHost(host)}
                     isPathPinned={(prefix) => !!pinnedPaths[prefix]}
                     onTogglePinPath={onTogglePinPath}
@@ -1301,7 +1328,7 @@ function PinnedTree({
             setFilter={setFilter}
             query={q}
             sslDisabled={!!mitmDisabledHosts[h.host]}
-            pinned={!!pinnedHosts[h.host]}
+            pinned={isHostPinnedFull(h.host)}
             onTogglePin={() => onTogglePinHost(h.host)}
             isPathPinned={(prefix) => !!pinnedPaths[prefix]}
             onTogglePinPath={onTogglePinPath}
@@ -1325,7 +1352,7 @@ function PinnedTree({
             setFilter={setFilter}
             query={q}
             sslDisabled={!!mitmDisabledHosts[p.host]}
-            pinned={!!pinnedHosts[p.host]}
+            pinned={isHostPinnedFull(p.host)}
             onTogglePin={() => onTogglePinHost(p.host)}
             isPathPinned={(prefix) => !!pinnedPaths[prefix]}
             onTogglePinPath={onTogglePinPath}
@@ -1403,6 +1430,15 @@ function SavedTree({
   const [open, setOpen] = useState(true);
   const [openApp, setOpenApp] = useState<Record<string, boolean>>({});
   const empty = tree.appList.length === 0 && tree.hostList.length === 0;
+  const isHostPinnedFull = (host: string): boolean => {
+    if (pinnedHosts[host]) return true;
+    for (const p of Object.keys(pinnedPaths)) {
+      const slash = p.indexOf('/');
+      const h = slash > 0 ? p.slice(0, slash) : p;
+      if (h === host) return true;
+    }
+    return false;
+  };
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
       <div
@@ -1504,7 +1540,7 @@ function SavedTree({
                     setFilter={setFilter}
                     query={q}
                     sslDisabled={!!mitmDisabledHosts[host]}
-                    pinned={!!pinnedHosts[host]}
+                    pinned={isHostPinnedFull(host)}
                     onTogglePin={() => onTogglePinHost(host)}
                     isPathPinned={(prefix) => !!pinnedPaths[prefix]}
                     onTogglePinPath={onTogglePinPath}

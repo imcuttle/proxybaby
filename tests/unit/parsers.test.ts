@@ -106,9 +106,33 @@ describe('ACP 解析', () => {
 });
 
 describe('Provider 识别', () => {
-  it('body messages 兜底 openai', () => {
-    const f = mkFlow({ request: mkReq({ url: 'https://custom/api', host: 'custom', path: '/api', bodyText: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }) }) });
+  it('非标 URL 的 anthropic 请求（顶级 system 字段）→ anthropic', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://api.example.com/v1/messages-proxy', host: 'api.example.com', path: '/v1/messages-proxy', bodyText: JSON.stringify({ model: 'claude-haiku-4.5', system: 'you are helpful', messages: [{ role: 'user', content: 'x' }] }) }) });
+    expect(detectProvider(f)).toBe('anthropic');
+  });
+  it('非标 URL 的 anthropic 请求（tools[].input_schema）→ anthropic', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://gateway.internal/ai/chat', host: 'gateway.internal', path: '/ai/chat', bodyText: JSON.stringify({ model: 'claude', messages: [{ role: 'user', content: 'x' }], tools: [{ name: 'read', input_schema: { type: 'object' } }] }) }) });
+    expect(detectProvider(f)).toBe('anthropic');
+  });
+  it('非标 URL 的 anthropic 请求（anthropic-version header）→ anthropic', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://gateway.internal/ai/chat', host: 'gateway.internal', path: '/ai/chat', headers: [{ name: 'anthropic-version', value: '2023-06-01' }], bodyText: JSON.stringify({ model: 'claude', messages: [{ role: 'user', content: 'x' }] }) }) });
+    expect(detectProvider(f)).toBe('anthropic');
+  });
+  it('非标 URL 的 openai 请求（tools[].function）→ openai', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://custom/api', host: 'custom', path: '/api', bodyText: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'x' }], tools: [{ type: 'function', function: { name: 'f', parameters: {} } }] }) }) });
     expect(detectProvider(f)).toBe('openai');
+  });
+  it('只有裸 messages 数组、无区分特征 → unknown（避免误判成 openai）', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://custom/api', host: 'custom', path: '/api', bodyText: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }) }) });
+    expect(detectProvider(f)).toBe('unknown');
+  });
+  it('标准 openai.com URL → openai', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://api.openai.com/v1/chat/completions', host: 'api.openai.com', path: '/v1/chat/completions', bodyText: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }) }) });
+    expect(detectProvider(f)).toBe('openai');
+  });
+  it('标准 anthropic.com URL → anthropic', () => {
+    const f = mkFlow({ request: mkReq({ url: 'https://api.anthropic.com/v1/messages', host: 'api.anthropic.com', path: '/v1/messages', bodyText: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }) }) });
+    expect(detectProvider(f)).toBe('anthropic');
   });
   it('非 AI 请求 unknown', () => {
     const f = mkFlow({ request: mkReq({ url: 'https://x/y', host: 'x', path: '/y', bodyText: '{"foo":1}' }) });

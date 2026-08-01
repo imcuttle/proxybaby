@@ -355,8 +355,8 @@ export interface ProxyBabyBridge {
   upstreamProxySet(cfg: UpstreamProxyConfig): Promise<UpstreamProxyConfig>;
   // Composer
   composerSend(req: { method: string; url: string; headers: Header[]; bodyText?: string }): Promise<{ ok: boolean; id?: string; error?: string }>;
-  // 独立子窗口（Settings / Diff / FilterConfig / FilterEntryEditor）
-  openWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor', opts?: { width?: number; height?: number; title?: string }): Promise<boolean>;
+  // 独立子窗口（Settings / Diff / FilterConfig / FilterEntryEditor / AI Sessions）
+  openWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'ai-session', opts?: { width?: number; height?: number; title?: string }): Promise<boolean>;
   closeSelfWindow(): Promise<void>;
   broadcast(channel: string, payload: unknown): Promise<void>;
   // 过滤规则编辑器子窗口：父窗口 open 时把 params 放在 latch；子窗口 mount 后 consume 拉取。

@@ -1,4 +1,4 @@
-import { Pause, Play, Plus, Trash2, Download, Upload, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Pause, Play, Plus, Trash2, Download, Upload, ChevronRight, ChevronLeft, Layers } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { ListenPopover } from './ListenPopover';
 import { cn } from '../lib/cn';
@@ -82,6 +82,23 @@ export function Toolbar() {
         </button>
         <button className="pb-btn" onClick={doImport} title="导入会话">
           <Upload size={16} />
+        </button>
+
+        <div className="mx-3 h-4 w-px bg-pb-border" />
+
+        <button
+          className="pb-btn"
+          data-testid="open-ai-sessions"
+          title="打开 AI Sessions 视图（按会话 → 轮次 → 请求聚合）"
+          onClick={() =>
+            window.proxybaby.openWindow('ai-session', {
+              title: 'ProxyBaby · AI Sessions',
+              width: 1100,
+              height: 720,
+            })
+          }
+        >
+          <Layers size={16} />
         </button>
 
         <div className="mx-3 h-4 w-px bg-pb-border" />

@@ -10,14 +10,16 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Bot, User, Cog, Wrench, Brain, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
+import { Bot, User, Cog, Wrench, Brain, ChevronDown, ChevronRight, Copy, Check, Layers } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { parseSession, type Provider } from '../../parsers';
 import type { ChatMessage, ChatToolCall, ChatToolDefinition, Flow } from '../../../shared/types';
 import { JsonTree } from '../JsonTree';
+import { extractSessionId } from '../../lib/ai-session';
 
-export function ChatView({ flow, provider, side = 'both' }: { flow: Flow; provider: Provider; side?: 'request' | 'response' | 'both' }) {
+export function ChatView({ flow, provider, side = 'both', hideSessionButton = false }: { flow: Flow; provider: Provider; side?: 'request' | 'response' | 'both'; hideSessionButton?: boolean }) {
   const session = useMemo(() => parseSession(flow, provider), [flow, provider]);
+  const sessionId = useMemo(() => extractSessionId(flow), [flow]);
   // 用户显式切换过的消息（true=折叠 / false=展开）。未记录的消息走默认规则。
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
 
@@ -73,8 +75,9 @@ export function ChatView({ flow, provider, side = 'both' }: { flow: Flow; provid
     <div className="flex flex-col h-full min-h-0">
       {/* 顶部固定：会话元信息 + 工具面板 + 折叠/展开控制 */}
       <div className="shrink-0 border-b border-pb-border/50 p-3 space-y-2">
-        <SessionMeta session={session} />
-        {session.tools && session.tools.length > 0 && (
+        <SessionMeta session={session} side={side} />
+        {/* 可用工具是请求侧信息，响应 Tab 不显示 */}
+        {side !== 'response' && session.tools && session.tools.length > 0 && (
           <ToolsPanel tools={session.tools} />
         )}
         {(totalIn + totalOut) > 0 && (
@@ -88,6 +91,35 @@ export function ChatView({ flow, provider, side = 'both' }: { flow: Flow; provid
             <span>请求 {totalIn} · 响应 {totalOut}</span>
             {(totalIn > AUTO_COLLAPSE_THRESHOLD || totalOut > AUTO_COLLAPSE_THRESHOLD) && (
               <span className="text-pb-muted/70">（默认折叠早期消息）</span>
+            )}
+            {!hideSessionButton && (
+              <button
+                className={cn(
+                  'ml-auto flex items-center gap-1 px-2 py-0.5 border rounded',
+                  sessionId
+                    ? 'border-pb-accent/50 text-pb-accent hover:bg-pb-accent/10'
+                    : 'border-pb-border/40 text-pb-muted/50 cursor-not-allowed',
+                )}
+                disabled={!sessionId}
+                title={sessionId ? '打开 AI Sessions 视图（同一会话的所有轮次）' : '此请求没有 Session Header'}
+                data-testid="chatview-open-session"
+                onClick={() => {
+                  if (!sessionId) return;
+                  window.proxybaby.openWindow('ai-session', {
+                    title: 'ProxyBaby · AI Sessions',
+                    width: 1100,
+                    height: 720,
+                  });
+                  // 打开后延迟广播预选：AiSessionView 订阅并自动选中当前 flow
+                  const targetId = flow.id;
+                  setTimeout(() => {
+                    try { window.proxybaby.broadcast('ai-session:preselect-flow', { id: targetId }); } catch {}
+                  }, 200);
+                }}
+              >
+                <Layers size={12} />
+                Session 视图
+              </button>
             )}
           </div>
         )}
@@ -177,21 +209,30 @@ function ChatColumn({
   );
 }
 
-function SessionMeta({ session }: { session: ReturnType<typeof parseSession> }) {
-  if (!session.model && !session.usage && session.temperature === undefined && !session.provider) return null;
+function SessionMeta({ session, side = 'both' }: { session: ReturnType<typeof parseSession>; side?: 'request' | 'response' | 'both' }) {
+  // 请求侧字段（body 里就有的）
+  const showReqFields = side !== 'response';
+  // 响应侧字段（usage 只有响应完成后才有）
+  const showRespFields = side !== 'request';
+  const hasReq = session.model || session.temperature !== undefined;
+  const hasResp = !!session.usage;
+  const hasProvider = session.provider && session.provider !== 'unknown';
+  // provider 标签在请求侧属于请求识别；响应侧不重复；both 展示一次
+  const showProvider = hasProvider && side !== 'response';
+  if (!showProvider && !(showReqFields && hasReq) && !(showRespFields && hasResp)) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 text-xs text-pb-muted border border-pb-border/40 rounded px-2 py-1">
-      {session.provider !== 'unknown' && (
+      {showProvider && (
         <span className="text-pb-accent uppercase">{session.provider}</span>
       )}
-      {session.model && <span>模型: <span className="text-pb-text">{session.model}</span></span>}
-      {session.temperature !== undefined && <span>温度: {session.temperature}</span>}
-      {session.usage && (
+      {showReqFields && session.model && <span>模型: <span className="text-pb-text">{session.model}</span></span>}
+      {showReqFields && session.temperature !== undefined && <span>温度: {session.temperature}</span>}
+      {showRespFields && session.usage && (
         <span>
           tokens: {session.usage.promptTokens ?? '?'} + {session.usage.completionTokens ?? '?'} = {session.usage.totalTokens ?? '?'}
         </span>
       )}
-      {session.usage?.cachedTokens != null && session.usage.cachedTokens > 0 && (
+      {showRespFields && session.usage?.cachedTokens != null && session.usage.cachedTokens > 0 && (
         <span
           className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pb-success/15 text-pb-success"
           title={
@@ -206,7 +247,7 @@ function SessionMeta({ session }: { session: ReturnType<typeof parseSession> }) 
             : ''}
         </span>
       )}
-      {session.usage?.cacheCreationTokens != null && session.usage.cacheCreationTokens > 0 && (
+      {showRespFields && session.usage?.cacheCreationTokens != null && session.usage.cacheCreationTokens > 0 && (
         <span
           className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pb-accent/15 text-pb-accent"
           title="本轮写入缓存的 token 数（Anthropic）"

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Trash2, Filter, Crosshair, Search, X, Plus, AlertTriangle, Wifi, WifiOff, Radio, Pause } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Trash2, Filter, Crosshair, Search, X, Plus, AlertTriangle, Wifi, WifiOff, Radio, Pause, Ban } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { matchFilter } from '../lib/filter';
+import type { RecordFilterConfig, AllowBlockConfig } from '../../shared/types';
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -46,6 +47,37 @@ export function StatusBar() {
   const overrideRef = useRef<HTMLDivElement>(null);
   const proxyRef = useRef<HTMLDivElement>(null);
   const proxyStatus = useFlowStore((s) => s.proxyStatus);
+
+  // 抓包记录过滤 & 允许/阻止列表：本地缓存主进程配置，用于状态栏常驻提示
+  const [recordFilterCfg, setRecordFilterCfg] = useState<RecordFilterConfig | null>(null);
+  const [allowBlockCfg, setAllowBlockCfg] = useState<AllowBlockConfig | null>(null);
+  useEffect(() => {
+    const api = window.proxybaby;
+    if (!api) return;
+    let mounted = true;
+    api.recordFilterGet().then((c) => { if (mounted) setRecordFilterCfg(c); });
+    api.allowBlockGet().then((c) => { if (mounted) setAllowBlockCfg(c); });
+    const off1 = api.onEvent('recordFilter:changed' as any, (c: any) => setRecordFilterCfg(c));
+    const off2 = api.onEvent('allowBlock:changed' as any, (c: any) => setAllowBlockCfg(c));
+    return () => { mounted = false; off1(); off2(); };
+  }, []);
+  const activeEntryCount = (cfg: { entries?: { enabled?: boolean }[] } | null): number =>
+    (cfg?.entries || []).filter((e) => e.enabled !== false).length;
+  const recordFilterActive = !!recordFilterCfg && recordFilterCfg.mode !== 'all' && activeEntryCount(recordFilterCfg) > 0;
+  const allowBlockActive = !!allowBlockCfg && allowBlockCfg.mode !== 'off' && activeEntryCount(allowBlockCfg) > 0;
+  const openFilterConfig = (tab?: 'record' | 'allowblock') =>
+    window.proxybaby.openWindow('filter-config', {
+      title: 'ProxyBaby · 过滤配置',
+      width: 760,
+      height: 640,
+    }).then(() => {
+      if (tab) {
+        // 通知 filter-config 窗口切到指定 Tab（若窗口支持）
+        setTimeout(() => {
+          try { window.proxybaby.broadcast('filter-config:goto-tab', { tab }); } catch {}
+        }, 200);
+      }
+    });
 
   // 点击外部或 Esc 关闭覆盖 popover
   useEffect(() => {
@@ -132,8 +164,43 @@ export function StatusBar() {
 
   const untrusted = cert && !cert.trusted;
 
+  const rfSummary = recordFilterActive && recordFilterCfg
+    ? `抓包记录过滤已生效（${recordFilterCfg.mode === 'include' ? '仅记录' : '排除'} ${activeEntryCount(recordFilterCfg)} 条规则）`
+    : '';
+  const abSummary = allowBlockActive && allowBlockCfg
+    ? `允许/阻止列表已生效（${allowBlockCfg.mode === 'allow' ? '仅允许' : '阻止'} ${activeEntryCount(allowBlockCfg)} 条规则）`
+    : '';
+
   return (
     <>
+      {(recordFilterActive || allowBlockActive) && (
+        <div
+          className="border-t border-pb-accent/40 bg-pb-accent/10 text-xs px-3 py-1.5 flex items-center gap-2 flex-wrap"
+          data-testid="filter-active-tip"
+        >
+          {recordFilterActive && (
+            <span className="flex items-center gap-1.5 text-pb-accent" data-testid="record-filter-tip">
+              <Filter size={12} />
+              {rfSummary}
+            </span>
+          )}
+          {recordFilterActive && allowBlockActive && <span className="text-pb-muted">·</span>}
+          {allowBlockActive && (
+            <span className="flex items-center gap-1.5 text-pb-accent" data-testid="allow-block-tip">
+              <Ban size={12} />
+              {abSummary}
+            </span>
+          )}
+          <button
+            className="pb-btn px-2 py-0.5 ml-auto text-pb-accent"
+            data-testid="filter-active-tip-open"
+            onClick={() => openFilterConfig()}
+            title="打开过滤配置窗口"
+          >
+            查看 / 修改
+          </button>
+        </div>
+      )}
       {untrusted && (
         <div className="border-t border-pb-warn/40 bg-pb-warn/10 text-xs px-3 py-1.5 flex items-center gap-2">
           <ShieldAlert size={14} className="text-pb-warn shrink-0" />

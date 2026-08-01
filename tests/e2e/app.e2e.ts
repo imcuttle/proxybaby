@@ -108,6 +108,273 @@ test('AI 美化：注入 OpenAI 流式响应，OpenAI Tab 呈现 chat 气泡', a
   await expect(page.getByText('Assistant', { exact: false }).first()).toBeVisible();
 });
 
+test('AI 元信息按侧过滤：请求 Tab 无 tokens/缓存/工具本体；响应 Tab 无 模型/温度/可用工具', async () => {
+  await injectFlow(
+    {
+      id: 'f-ai-meta', status: 'streaming', isTLS: true, sseFrames: [],
+      app: { name: 'node', pid: 21 },
+      request: {
+        method: 'POST',
+        url: 'https://api.openai.com/v1/chat/completions', host: 'api.openai.com', path: '/v1/chat/completions',
+        scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: Date.now(),
+        contentType: 'application/json',
+        bodyText: JSON.stringify({
+          model: 'gpt-4o', temperature: 0.5,
+          messages: [{ role: 'user', content: 'q' }],
+          tools: [{ type: 'function', function: { name: 'ToolA', parameters: {} } }],
+        }),
+      },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-ai-meta', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: true, contentType: 'text/event-stream' } } },
+      { event: 'flow:sse-frame', payload: { id: 'f-ai-meta', frame: { data: '{"choices":[{"delta":{"content":"a"}}]}', raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'f-ai-meta', frame: { data: '{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":22,"total_tokens":33,"prompt_tokens_details":{"cached_tokens":7}}}', raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:end', payload: { id: 'f-ai-meta', durationMs: 50, status: 'completed' } },
+    ],
+  );
+  await page.locator('[data-testid="flow-row"][data-flow-id="f-ai-meta"]').click();
+
+  // 请求侧 OpenAI Tab（左）
+  await page.getByRole('tab', { name: 'OpenAI' }).first().click();
+  const reqPanel = page.locator('[role="tabpanel"][data-state="active"]').first();
+  await expect(reqPanel).toContainText('模型');
+  await expect(reqPanel).toContainText('gpt-4o');
+  await expect(reqPanel).toContainText('温度');
+  await expect(reqPanel).toContainText('可用工具');
+  await expect(reqPanel).not.toContainText('tokens:');
+  await expect(reqPanel).not.toContainText('缓存 ');
+
+  // 响应侧 OpenAI Tab（右）
+  await page.getByRole('tab', { name: 'OpenAI' }).last().click();
+  const respPanel = page.locator('[role="tabpanel"][data-state="active"]').last();
+  await expect(respPanel).toContainText('tokens:');
+  await expect(respPanel).toContainText('缓存 7');
+  await expect(respPanel).not.toContainText('模型:');
+  await expect(respPanel).not.toContainText('温度:');
+  await expect(respPanel).not.toContainText('可用工具');
+});
+
+// ============ AI Sessions 独立子窗口 ============
+
+/** 构造一条带 session/turn header 的 AI flow */
+function aiFlow(opts: {
+  id: string;
+  sessionId?: string;
+  rootRequestId?: string;
+  startedAt: number;
+  model?: string;
+}) {
+  const headers: { name: string; value: string }[] = [];
+  if (opts.sessionId) headers.push({ name: 'X-Conversation-Id', value: opts.sessionId });
+  if (opts.rootRequestId) headers.push({ name: 'X-Root-Request-Id', value: opts.rootRequestId });
+  return {
+    id: opts.id,
+    status: 'completed' as const,
+    isTLS: true,
+    sseFrames: [],
+    app: { name: 'cbc', pid: 999 },
+    request: {
+      method: 'POST',
+      url: 'https://api.openai.com/v1/chat/completions',
+      host: 'api.openai.com',
+      path: '/v1/chat/completions',
+      scheme: 'https' as const,
+      httpVersion: '1.1',
+      headers,
+      bodySize: 0,
+      startedAt: opts.startedAt,
+      contentType: 'application/json',
+      bodyText: JSON.stringify({ model: opts.model || 'gpt-4o', messages: [{ role: 'user', content: 'q' }] }),
+    },
+  };
+}
+
+test('AI Sessions 窗口：Toolbar 按钮打开，展示 Session/Turn/Request 三级树', async () => {
+  // 注入 3 条 flow：sess-A/turn-1 两次、sess-A/turn-2 一次
+  await injectFlow(aiFlow({ id: 'f-sess-1', sessionId: 'sess-A', rootRequestId: 'turn-1', startedAt: 1000, model: 'gpt-4o' }), [
+    { event: 'flow:end', payload: { id: 'f-sess-1', durationMs: 10, status: 'completed' } },
+  ]);
+  await injectFlow(aiFlow({ id: 'f-sess-2', sessionId: 'sess-A', rootRequestId: 'turn-1', startedAt: 2000, model: 'gpt-4o' }), [
+    { event: 'flow:end', payload: { id: 'f-sess-2', durationMs: 10, status: 'completed' } },
+  ]);
+  await injectFlow(aiFlow({ id: 'f-sess-3', sessionId: 'sess-A', rootRequestId: 'turn-2', startedAt: 3000, model: 'gpt-4o' }), [
+    { event: 'flow:end', payload: { id: 'f-sess-3', durationMs: 10, status: 'completed' } },
+  ]);
+
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+  await expect(win.getByTestId('ai-session-window')).toBeVisible();
+
+  // 断言树结构
+  await expect(win.locator('[data-testid="ai-session-row"][data-session-id="sess-A"]')).toBeVisible();
+  await expect(win.locator('[data-testid="ai-turn-row"][data-root-request-id="turn-1"]')).toBeVisible();
+  await expect(win.locator('[data-testid="ai-turn-row"][data-root-request-id="turn-2"]')).toBeVisible();
+  await expect(win.locator('[data-testid="ai-request-row"]')).toHaveCount(3);
+  // 顶部统计
+  await expect(win.getByTestId('ai-session-summary')).toContainText('1 个会话');
+  await expect(win.getByTestId('ai-session-summary')).toContainText('2 轮');
+  await expect(win.getByTestId('ai-session-summary')).toContainText('3 个请求');
+
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：单击请求行 → 主窗口选中对应 flow', async () => {
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+
+  // 单击第二条 request 行（f-sess-2）
+  await win.locator('[data-testid="ai-request-row"][data-flow-id="f-sess-2"]').click();
+  // 主窗口 selectedId 应变为 f-sess-2
+  const selected = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(selected).toBe('f-sess-2');
+
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：无 session header 的 flow 不出现在树里', async () => {
+  // 注入一条没有 session header 的 AI flow
+  await injectFlow(aiFlow({ id: 'f-no-sess', startedAt: 5000 }), [
+    { event: 'flow:end', payload: { id: 'f-no-sess', durationMs: 10, status: 'completed' } },
+  ]);
+
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+
+  // 无 session header 的 flow 不应出现
+  await expect(win.locator('[data-testid="ai-request-row"][data-flow-id="f-no-sess"]')).toHaveCount(0);
+  // 仍能看到之前的 sess-A 三条
+  await expect(win.locator('[data-testid="ai-request-row"]')).toHaveCount(3);
+
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：仅有 session header、缺 X-Root-Request-Id 的 flow 也被排除', async () => {
+  // 只带 X-Conversation-Id，没有 X-Root-Request-Id
+  await injectFlow(aiFlow({ id: 'f-no-root', sessionId: 'sess-A', startedAt: 5500 }), [
+    { event: 'flow:end', payload: { id: 'f-no-root', durationMs: 10, status: 'completed' } },
+  ]);
+
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+
+  // f-no-root 不应出现
+  await expect(win.locator('[data-testid="ai-request-row"][data-flow-id="f-no-root"]')).toHaveCount(0);
+  // 之前的 sess-A 三条仍在
+  await expect(win.locator('[data-testid="ai-request-row"]')).toHaveCount(3);
+
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：左右两栏可 resize（存在 PanelResizeHandle）', async () => {
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+  // react-resizable-panels 会给 handle 元素加 data-panel-resize-handle-* 属性
+  const handle = win.locator('[data-panel-resize-handle-id], [data-panel-resize-handle-enabled]').first();
+  await expect(handle).toBeVisible();
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：子窗口内嵌 ChatView 不再显示"Session 视图"按钮', async () => {
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+  // 选中一条 request，让右侧 ChatView 挂载
+  await win.locator('[data-testid="ai-request-row"][data-flow-id="f-sess-2"]').click();
+  // ChatView 内的"Session 视图"按钮不应存在
+  await expect(win.getByTestId('chatview-open-session')).toHaveCount(0);
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：从主窗口 ChatView 打开 → 自动预选对应 flow', async () => {
+  // 先选中带 session header 的抓包
+  await page.locator('[data-testid="flow-row"][data-flow-id="f-sess-2"]').click();
+  // 切到 OpenAI Tab（左侧 Request 侧）
+  await page.getByRole('tab', { name: 'OpenAI' }).first().click();
+  // 点击"Session 视图"按钮
+  const btn = page.getByTestId('chatview-open-session').first();
+  await expect(btn).toBeEnabled();
+  const before = app.windows().length;
+  await btn.click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+  // 等 preselect broadcast 到达，f-sess-2 应被选中（selected 行会带蓝底且 bg 变化）
+  const row = win.locator('[data-testid="ai-request-row"][data-flow-id="f-sess-2"]');
+  await expect(row).toBeVisible();
+  // 断言右侧 ChatView 已加载（说明 selectedFlowId 已被设置）
+  await expect(win.locator('.method-badge, .status-badge, .font-mono').first()).toBeVisible();
+  await win.getByTestId('close-self').click();
+});
+
+test('AI Sessions 窗口：新抓包实时刷新（订阅 flow:* 事件）', async () => {
+  const before = app.windows().length;
+  await page.getByTestId('open-ai-sessions').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#ai-session'));
+  if (!win) throw new Error('ai-session 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+
+  const beforeCount = await win.locator('[data-testid="ai-request-row"]').count();
+  // 在打开窗口后，往主进程注入一条新的 session flow
+  await injectFlow(aiFlow({ id: 'f-sess-4', sessionId: 'sess-A', rootRequestId: 'turn-3', startedAt: 6000, model: 'gpt-4o' }), [
+    { event: 'flow:end', payload: { id: 'f-sess-4', durationMs: 10, status: 'completed' } },
+  ]);
+  // 等子窗口树刷新
+  await expect(win.locator('[data-testid="ai-request-row"][data-flow-id="f-sess-4"]')).toBeVisible({ timeout: 5000 });
+  const afterCount = await win.locator('[data-testid="ai-request-row"]').count();
+  expect(afterCount).toBe(beforeCount + 1);
+
+  await win.getByTestId('close-self').click();
+});
+
 test('SSE Tab：呈现原始事件帧', async () => {
   await page.locator('[data-testid="flow-row"][data-flow-id="f-ai"]').click();
   await page.getByRole('tab', { name: 'SSE' }).click();
@@ -351,6 +618,79 @@ test('文本搜索：按 URL 过滤列表', async () => {
   await page.getByTestId('searchbar-input').fill('');
 });
 
+test('关闭搜索栏（X 按钮）应清空搜索条件并恢复完整列表', async () => {
+  await resetFilters();
+  // 输入一个只有 f-http 匹配的关键词
+  await page.getByTestId('searchbar-input').fill('users');
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-http"]').first()).toBeVisible();
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-ai"]')).toHaveCount(0);
+  // 点关闭按钮
+  await page.locator('button[title^="关闭 ESC"]').click();
+  // 列表恢复：其他 flow 重新出现
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-ai"]').first()).toBeVisible();
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-ws"]').first()).toBeVisible();
+  // store 里 filter.text 也已清空
+  const filterText = await page.evaluate(() => (window as any).__pbStore.getState().filter.text);
+  expect(filterText).toBe('');
+});
+
+test('关闭搜索栏（ESC）应清空搜索条件并恢复完整列表', async () => {
+  await resetFilters();
+  await page.getByTestId('searchbar-input').fill('users');
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-http"]').first()).toBeVisible();
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-ai"]')).toHaveCount(0);
+  // 焦点在输入框上按 ESC
+  await page.getByTestId('searchbar-input').press('Escape');
+  await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-ai"]').first()).toBeVisible();
+  const filterText = await page.evaluate(() => (window as any).__pbStore.getState().filter.text);
+  expect(filterText).toBe('');
+});
+
+test('方向键切换选中抓包 item：↓/↑/Home/End', async () => {
+  await resetFilters();
+  // 收起搜索栏，避免焦点落在 input 上导致方向键被输入框吃掉
+  await page.evaluate(() => (window as any).__pbStore?.getState().setSearchOpen(false));
+  // 点击列表第一行（DOM 顺序），获得当前选中 id
+  const rows = page.locator('[data-testid="flow-row"]');
+  await expect(rows.first()).toBeVisible();
+  await rows.first().click();
+  const firstId = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(firstId).toBeTruthy();
+  // 焦点放到 body，防止 row 上的 focus 阻塞
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  // ArrowDown → 选中应变化
+  await page.keyboard.press('ArrowDown');
+  const afterDown = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(afterDown).not.toBe(firstId);
+  // ArrowUp → 回到第一条
+  await page.keyboard.press('ArrowUp');
+  const afterUp = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(afterUp).toBe(firstId);
+  // End → 最后一条（DOM 顺序）
+  await rows.last().waitFor();
+  const lastId = await rows.last().getAttribute('data-flow-id');
+  await page.keyboard.press('End');
+  const afterEnd = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(afterEnd).toBe(lastId);
+  // Home → 回第一条
+  await page.keyboard.press('Home');
+  const afterHome = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(afterHome).toBe(firstId);
+});
+
+test('方向键在输入框内不切换选中', async () => {
+  await resetFilters();
+  const rows = page.locator('[data-testid="flow-row"]');
+  await rows.first().click();
+  const firstId = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  // 焦点放到搜索输入框
+  await page.getByTestId('searchbar-input').click();
+  await page.keyboard.press('ArrowDown');
+  const stillSame = await page.evaluate(() => (window as any).__pbStore.getState().selectedId);
+  expect(stillSame).toBe(firstId);
+});
+
+
 test('类型过滤条：HTTPS/全部', async () => {
   await resetFilters();
   await page.getByRole('button', { name: 'HTTPS', exact: true }).click();
@@ -408,6 +748,73 @@ test('侧栏右键：将域名加入抓包包含列表（record-filter include�
   expect(cfg.entries.some((e: any) => e.kind === 'host' && e.value === 'api.demo.com')).toBe(true);
 });
 
+test('底部状态栏：record-filter 生效时显示常驻 tip', async () => {
+  // 设置 record filter 为 include 一条 host
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.recordFilterSet({
+      mode: 'include',
+      entries: [{ kind: 'host', value: 'demo.com', enabled: true }],
+    });
+  });
+  await expect(page.getByTestId('filter-active-tip')).toBeVisible();
+  await expect(page.getByTestId('record-filter-tip')).toContainText('抓包记录过滤已生效');
+  await expect(page.getByTestId('record-filter-tip')).toContainText('仅记录');
+  // 关闭 record filter → tip 消失
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.recordFilterSet({ mode: 'all', entries: [] });
+  });
+  await expect(page.getByTestId('filter-active-tip')).toHaveCount(0);
+});
+
+test('底部状态栏：allow-block 生效时显示常驻 tip', async () => {
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.allowBlockSet({
+      mode: 'block',
+      entries: [{ kind: 'host', value: 'ban.example.com', enabled: true }],
+    });
+  });
+  await expect(page.getByTestId('filter-active-tip')).toBeVisible();
+  await expect(page.getByTestId('allow-block-tip')).toContainText('允许/阻止列表已生效');
+  await expect(page.getByTestId('allow-block-tip')).toContainText('阻止');
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.allowBlockSet({ mode: 'off', entries: [] });
+  });
+  await expect(page.getByTestId('filter-active-tip')).toHaveCount(0);
+});
+
+test('底部状态栏：两个都生效时同时显示 + 点击打开过滤配置窗口', async () => {
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.recordFilterSet({
+      mode: 'exclude',
+      entries: [{ kind: 'host', value: 'noise.com', enabled: true }],
+    });
+    await (window as any).proxybaby.allowBlockSet({
+      mode: 'allow',
+      entries: [{ kind: 'host', value: 'only.com', enabled: true }],
+    });
+  });
+  await expect(page.getByTestId('record-filter-tip')).toBeVisible();
+  await expect(page.getByTestId('allow-block-tip')).toBeVisible();
+
+  const before = app.windows().length;
+  await page.getByTestId('filter-active-tip-open').click();
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#filter-config'));
+  if (!win) throw new Error('filter-config 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+  await expect(win.getByTestId('filter-config-window')).toBeVisible();
+  await win.getByTestId('close-self').click();
+
+  // 恢复干净
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.recordFilterSet({ mode: 'all', entries: [] });
+    await (window as any).proxybaby.allowBlockSet({ mode: 'off', entries: [] });
+  });
+});
+
 test('侧栏右键：置顶此域名 → 出现在收藏夹已置顶分组', async () => {
   await resetFilters();
   // 先清掉可能残留的 pinnedHosts
@@ -432,6 +839,71 @@ test('侧栏右键：置顶此域名 → 出现在收藏夹已置顶分组', asy
   // tree 展开后应该看到 api.demo.com 的 host 子节点（复用 HostItem 组件，
   // 侧栏里同时会有两个 host-row：正常"域名"分组 + 已置顶 tree 下的）
   await expect(page.locator('[data-testid="host-row"][data-host="api.demo.com"]')).toHaveCount(2);
+});
+
+test('侧栏右键：已置顶域名的右键菜单显示"取消置顶此域名"', async () => {
+  // 依赖上一个测试留下的置顶状态；若上一个失败或此用例被单独跑，兜底置顶一次
+  await resetFilters();
+  const pinnedBefore = await page.evaluate(() => (window as any).__pbStore.getState().pinnedHosts['api.demo.com']);
+  if (!pinnedBefore) {
+    await page.evaluate(() => {
+      (window as any).__pbStore.getState().togglePinHost('api.demo.com');
+    });
+  }
+  // "域名"分组下的那个 host-row（非"已置顶"树里的）
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]').last();
+  await hostRow.click({ button: 'right' });
+  // 应显示"取消置顶此域名"，且不再有独立的"置顶此域名"
+  await expect(page.getByText(/^取消置顶此域名$/)).toBeVisible();
+  await expect(page.getByText(/^置顶此域名$/)).toHaveCount(0);
+  // 点击取消置顶
+  await page.getByText(/^取消置顶此域名$/).click();
+  const pinnedAfter = await page.evaluate(() => (window as any).__pbStore.getState().pinnedHosts['api.demo.com']);
+  expect(pinnedAfter).toBeUndefined();
+});
+
+test('侧栏右键：仅 subpath 被 pin 的 host，域名分组的右键菜单只操作 host 层（不误清 subpath）', async () => {
+  await resetFilters();
+  // 先清干净
+  await page.evaluate(() => {
+    (window as any).__pbStore.setState({ pinnedHosts: {}, pinnedPaths: {}, pinnedIds: {} });
+    localStorage.removeItem('proxybaby:pinned-hosts');
+    localStorage.removeItem('proxybaby:pinned-paths');
+  });
+  // orphan：只 pin 了 subpath
+  await page.evaluate(() => {
+    (window as any).__pbStore.getState().togglePinPath('api.demo.com/users');
+  });
+  // "域名"分组下的 api.demo.com host 本身未 pin → 菜单应显示"置顶此域名"
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]').last();
+  await hostRow.click({ button: 'right' });
+  await expect(page.getByText(/^置顶此域名$/)).toBeVisible();
+  // 点击后应只加 host pin，不动 subpath
+  await page.getByText(/^置顶此域名$/).click();
+  const state = await page.evaluate(() => {
+    const s = (window as any).__pbStore.getState();
+    return { hosts: s.pinnedHosts, paths: s.pinnedPaths };
+  });
+  expect(state.hosts['api.demo.com']).toBe(true);
+  expect(state.paths['api.demo.com/users']).toBe(true);
+});
+
+test('侧栏右键：已置顶树下的 host 右键"取消置顶"，一次性清空 host + 其下所有 subpath', async () => {
+  await resetFilters();
+  await page.evaluate(() => {
+    (window as any).__pbStore.setState({ pinnedHosts: { 'api.demo.com': true }, pinnedPaths: { 'api.demo.com/users': true }, pinnedIds: {} });
+  });
+  // "已置顶"树下会出现同 host（第一处），点击右键 → 菜单"取消置顶此域名"
+  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]').first();
+  await hostRow.click({ button: 'right' });
+  await expect(page.getByText(/^取消置顶此域名$/)).toBeVisible();
+  await page.getByText(/^取消置顶此域名$/).click();
+  const state = await page.evaluate(() => {
+    const s = (window as any).__pbStore.getState();
+    return { hosts: s.pinnedHosts, paths: s.pinnedPaths };
+  });
+  expect(state.hosts['api.demo.com']).toBeUndefined();
+  expect(Object.keys(state.paths).some((p) => p.startsWith('api.demo.com/'))).toBe(false);
 });
 
 test('侧栏右键：快速规则 → 禁止访问，生成临时规则', async () => {

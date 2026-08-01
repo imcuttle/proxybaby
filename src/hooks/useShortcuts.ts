@@ -73,6 +73,8 @@ export function useShortcuts(opts: {
       if (key === 'escape') {
         if (useFlowStore.getState().searchOpen) {
           e.preventDefault();
+          // 与关闭按钮保持一致：关闭时清空搜索条件
+          useFlowStore.getState().setFilter({ text: '', advanced: undefined });
           setSearchOpen(false);
         }
         return;

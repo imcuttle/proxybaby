@@ -207,7 +207,15 @@ export function SearchBar({ onNavigate }: { onNavigate?: (dir: 'next' | 'prev') 
           {showPresets ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           预设 {presets.length > 0 && <span>({presets.length})</span>}
         </button>
-        <button className="pb-btn px-1.5" title="关闭 ESC" onClick={() => setSearchOpen(false)}>
+        <button
+          className="pb-btn px-1.5"
+          title="关闭 ESC（清空搜索条件）"
+          onClick={() => {
+            // 关闭搜索栏时同步清空搜索条件，避免"关了但列表还在过滤"的错觉
+            setFilter({ text: '', advanced: undefined });
+            setSearchOpen(false);
+          }}
+        >
           <X size={14} />
         </button>
       </div>

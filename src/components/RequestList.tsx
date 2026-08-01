@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback } from 'react';
+import { useMemo, useRef, useCallback, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Lock, LockOpen, Pin, Bookmark, MoreHorizontal, Pencil, ArrowUp, ArrowDown } from 'lucide-react';
 import { useFlowStore, type SortKey, type SortState } from '../store/flows';
@@ -128,6 +128,49 @@ export function RequestList() {
     estimateSize: () => 26,
     overscan: 20,
   });
+
+  // 跨窗口联动：当 scrollTargetId 被设置（如 AI Sessions 子窗口触发选中），滚动到该行
+  const scrollTargetId = useFlowStore((s) => s.scrollTargetId);
+  const requestScrollTo = useFlowStore((s) => s.requestScrollTo);
+  useEffect(() => {
+    if (!scrollTargetId) return;
+    const idx = orderedIds.indexOf(scrollTargetId);
+    if (idx >= 0) rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
+    requestScrollTo(null);
+  }, [scrollTargetId, orderedIds, rowVirtualizer, requestScrollTo]);
+
+  // 方向键切换选中的抓包 item（焦点不在输入框时生效）
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el.isContentEditable) return true;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      // Monaco / CodeMirror 内部 textarea 也在此命中
+      return false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const key = e.key;
+      if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Home' && key !== 'End') return;
+      if (isEditable(e.target)) return;
+      if (orderedIds.length === 0) return;
+      const currentIdx = selectedId ? orderedIds.indexOf(selectedId) : -1;
+      let nextIdx = currentIdx;
+      if (key === 'ArrowUp') nextIdx = currentIdx <= 0 ? 0 : currentIdx - 1;
+      else if (key === 'ArrowDown') nextIdx = currentIdx < 0 ? 0 : Math.min(orderedIds.length - 1, currentIdx + 1);
+      else if (key === 'Home') nextIdx = 0;
+      else if (key === 'End') nextIdx = orderedIds.length - 1;
+      if (nextIdx === currentIdx && currentIdx >= 0) return;
+      e.preventDefault();
+      const nextId = orderedIds[nextIdx];
+      setSelected(nextId);
+      // 滚到可视区
+      rowVirtualizer.scrollToIndex(nextIdx, { align: 'auto' });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [orderedIds, selectedId, setSelected, rowVirtualizer]);
 
   return (
     <div className="h-full flex flex-col bg-pb-bg">

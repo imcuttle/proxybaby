@@ -1,5 +1,16 @@
 # proxybaby
 
+## 0.7.0
+
+### ✨ 新功能
+- feat(rules): 快速规则子菜单抽独立组件，抓包列表右键也可用；命中项 ✓ toggle 一键删除 (`1706a41`)
+
+### 📝 文档
+- docs(readme): 重新生成截图 —— OpenAI/Anthropic chat 视图 + 规则页 + 新增 AI Sessions 截图 (`9deb264`)
+
+### 🐛 修复
+- fix(release): CHANGELOG 版本标题被反复叠加 `## ` 前缀 (`45fe74b`)
+
 ## 0.6.0
 
 ### ✨ 新功能

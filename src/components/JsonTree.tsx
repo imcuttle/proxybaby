@@ -30,10 +30,18 @@ function Node({
 
   if (!isObj) {
     return (
-      <div className="pl-4">
-        {keyLabel}
-        {keyLabel && <span className="text-pb-muted">: </span>}
-        <ValueLeaf value={value} />
+      <div className="group pl-4 flex items-baseline gap-1 hover:bg-pb-hover/40 rounded">
+        <span>
+          {keyLabel}
+          {keyLabel && <span className="text-pb-muted">: </span>}
+          <ValueLeaf value={value} />
+        </span>
+        <CopyBtn
+          getText={() =>
+            typeof value === 'string' ? value : JSON.stringify(value)
+          }
+          title="复制值"
+        />
       </div>
     );
   }
@@ -57,7 +65,7 @@ function Node({
             {!open && <span className="opacity-60"> {entries.length} 项 </span>}
             {!open && bracket[1]}
           </span>
-          <CopyBtn getText={() => JSON.stringify(value, null, 2)} />
+          <CopyBtn getText={() => JSON.stringify(value, null, 2)} title="复制此节点" />
           {open && (
             <>
               <div>
@@ -82,12 +90,12 @@ function ValueLeaf({ value }: { value: unknown }) {
   return <span>{String(value)}</span>;
 }
 
-function CopyBtn({ getText }: { getText: () => string }) {
+function CopyBtn({ getText, title = '复制' }: { getText: () => string; title?: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
       className="opacity-0 group-hover:opacity-100 ml-1 inline-flex align-middle text-pb-muted hover:text-pb-text"
-      title="复制此节点"
+      title={title}
       onClick={(e) => {
         e.stopPropagation();
         navigator.clipboard.writeText(getText());

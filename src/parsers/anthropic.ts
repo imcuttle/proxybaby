@@ -95,6 +95,8 @@ export function parseAnthropic(flow: Flow): ChatSession {
             promptTokens: data.usage.input_tokens,
             completionTokens: data.usage.output_tokens,
             totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+            cachedTokens: data.usage.cache_read_input_tokens,
+            cacheCreationTokens: data.usage.cache_creation_input_tokens,
           };
         }
         if (data.delta?.stop_reason) asst.finishReason = data.delta.stop_reason;
@@ -112,6 +114,8 @@ export function parseAnthropic(flow: Flow): ChatSession {
           promptTokens: res.usage.input_tokens,
           completionTokens: res.usage.output_tokens,
           totalTokens: (res.usage.input_tokens || 0) + (res.usage.output_tokens || 0),
+          cachedTokens: res.usage.cache_read_input_tokens,
+          cacheCreationTokens: res.usage.cache_creation_input_tokens,
         };
       }
       if (Array.isArray(res.content)) {

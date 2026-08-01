@@ -99,7 +99,7 @@ test('AI 美化：注入 OpenAI 流式响应，OpenAI Tab 呈现 chat 气泡', a
 
   await page.locator('[data-testid="flow-row"][data-flow-id="f-ai"]').click();
   // 切到 OpenAI Tab
-  await page.getByRole('tab', { name: 'OpenAI' }).click();
+  await page.getByRole('tab', { name: 'OpenAI' }).last().click();
   // 用户消息 + 助手拼接后的内容
   await expect(page.getByText('你好', { exact: false }).first()).toBeVisible();
   await expect(page.getByText('，我能帮你', { exact: false }).first()).toBeVisible();

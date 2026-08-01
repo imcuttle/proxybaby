@@ -10,13 +10,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Bot, User, Cog, Wrench, Brain, ChevronDown, ChevronRight } from 'lucide-react';
+import { Bot, User, Cog, Wrench, Brain, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { parseSession, type Provider } from '../../parsers';
 import type { ChatMessage, ChatToolCall, ChatToolDefinition, Flow } from '../../../shared/types';
 import { JsonTree } from '../JsonTree';
 
-export function ChatView({ flow, provider }: { flow: Flow; provider: Provider }) {
+export function ChatView({ flow, provider, side = 'both' }: { flow: Flow; provider: Provider; side?: 'request' | 'response' | 'both' }) {
   const session = useMemo(() => parseSession(flow, provider), [flow, provider]);
   // 用户显式切换过的消息（true=折叠 / false=展开）。未记录的消息走默认规则。
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -93,26 +93,30 @@ export function ChatView({ flow, provider }: { flow: Flow; provider: Provider })
         )}
       </div>
 
-      {/* 主体：两列独立滚动。中间一根细分隔线。 */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2">
-        <ChatColumn
-          title="输入（请求）"
-          hint="发送给模型的 messages"
-          accent="text-pb-accent"
-          messages={inputMessages}
-          isCollapsed={isCollapsed}
-          onToggle={toggleOne}
-          className="lg:border-r border-pb-border/50"
-        />
-        <ChatColumn
-          title="输出（响应）"
-          hint={session.streaming ? '● 流式接收中…' : '模型返回'}
-          accent="text-pb-success"
-          streamingHint={session.streaming}
-          messages={outputMessages}
-          isCollapsed={isCollapsed}
-          onToggle={toggleOne}
-        />
+      {/* 主体：两列独立滚动。中间一根细分隔线。side 用于让 Request/Response 分栏各自内嵌本视图。 */}
+      <div className={cn('flex-1 min-h-0 grid', side === 'both' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1')}>
+        {side !== 'response' && (
+          <ChatColumn
+            title="输入（请求）"
+            hint="发送给模型的 messages"
+            accent="text-pb-accent"
+            messages={inputMessages}
+            isCollapsed={isCollapsed}
+            onToggle={toggleOne}
+            className={side === 'both' ? 'lg:border-r border-pb-border/50' : ''}
+          />
+        )}
+        {side !== 'request' && (
+          <ChatColumn
+            title="输出（响应）"
+            hint={session.streaming ? '● 流式接收中…' : '模型返回'}
+            accent="text-pb-success"
+            streamingHint={session.streaming}
+            messages={outputMessages}
+            isCollapsed={isCollapsed}
+            onToggle={toggleOne}
+          />
+        )}
       </div>
 
       {!session.messages.length && (
@@ -174,7 +178,7 @@ function ChatColumn({
 }
 
 function SessionMeta({ session }: { session: ReturnType<typeof parseSession> }) {
-  if (!session.model && !session.usage && session.temperature === undefined) return null;
+  if (!session.model && !session.usage && session.temperature === undefined && !session.provider) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 text-xs text-pb-muted border border-pb-border/40 rounded px-2 py-1">
       {session.provider !== 'unknown' && (
@@ -185,6 +189,29 @@ function SessionMeta({ session }: { session: ReturnType<typeof parseSession> }) 
       {session.usage && (
         <span>
           tokens: {session.usage.promptTokens ?? '?'} + {session.usage.completionTokens ?? '?'} = {session.usage.totalTokens ?? '?'}
+        </span>
+      )}
+      {session.usage?.cachedTokens != null && session.usage.cachedTokens > 0 && (
+        <span
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pb-success/15 text-pb-success"
+          title={
+            session.usage.promptTokens
+              ? `缓存命中率 ${Math.round((session.usage.cachedTokens / session.usage.promptTokens) * 100)}%`
+              : '缓存命中'
+          }
+        >
+          缓存 {session.usage.cachedTokens}
+          {session.usage.promptTokens
+            ? ` (${Math.round((session.usage.cachedTokens / session.usage.promptTokens) * 100)}%)`
+            : ''}
+        </span>
+      )}
+      {session.usage?.cacheCreationTokens != null && session.usage.cacheCreationTokens > 0 && (
+        <span
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pb-accent/15 text-pb-accent"
+          title="本轮写入缓存的 token 数（Anthropic）"
+        >
+          缓存写入 {session.usage.cacheCreationTokens}
         </span>
       )}
     </div>
@@ -265,8 +292,13 @@ function MessageBubble({
 }) {
   const meta = ROLE_META[message.role];
   const preview = collapsed ? buildPreview(message) : '';
+  const copyableText = [
+    message.reasoning ? `<think>\n${message.reasoning}\n</think>` : '',
+    message.content || '',
+    ...(message.toolCalls?.map((tc) => `[Tool ${tc.name}(${tc.argumentsText || ''})]`) ?? []),
+  ].filter(Boolean).join('\n\n');
   return (
-    <div className={cn('rounded border', meta.border)}>
+    <div className={cn('group rounded border relative', meta.border)}>
       <button
         type="button"
         onClick={onToggle}
@@ -295,6 +327,9 @@ function MessageBubble({
           <span className="ml-auto shrink-0 text-pb-accent animate-pulse">流式中…</span>
         )}
       </button>
+      {copyableText && (
+        <MessageCopyBtn text={copyableText} />
+      )}
       {!collapsed && (
         <div className="p-2 space-y-2">
           {message.reasoning && (
@@ -319,6 +354,28 @@ function MessageBubble({
         </div>
       )}
     </div>
+  );
+}
+
+function MessageCopyBtn({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text);
+        setDone(true);
+        setTimeout(() => setDone(false), 1200);
+      }}
+      className={cn(
+        'absolute top-1 right-1 p-1 rounded text-pb-muted hover:text-pb-text hover:bg-pb-hover/60',
+        'opacity-0 group-hover:opacity-100 transition-opacity',
+      )}
+      title="复制此条消息 Markdown"
+    >
+      {done ? <Check size={12} className="text-pb-success" /> : <Copy size={12} />}
+    </button>
   );
 }
 

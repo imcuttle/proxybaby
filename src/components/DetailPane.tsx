@@ -65,6 +65,7 @@ export function DetailPane() {
             <TabTrigger value="raw">原始</TabTrigger>
             <TabTrigger value="summary">摘要</TabTrigger>
             <TabTrigger value="code">代码</TabTrigger>
+            {provider !== 'unknown' && <TabTrigger value="chat">{provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : 'ACP'}</TabTrigger>}
             {customTabs.request.map((fmt) => (
               <TabTrigger key={fmt} value={`custom:${fmt}`}>
                 {PREVIEW_FORMAT_LABEL[fmt] ?? fmt}
@@ -83,6 +84,9 @@ export function DetailPane() {
             <Tabs.Content value="raw" className="flex-1 min-h-0"><RawView flow={flow} which="request" /></Tabs.Content>
             <Tabs.Content value="summary" className="flex-1 min-h-0 overflow-auto pb-scroll"><SummaryView flow={flow} /></Tabs.Content>
             <Tabs.Content value="code" className="flex-1 min-h-0"><CodeGenView flow={flow} /></Tabs.Content>
+            {provider !== 'unknown' && (
+              <Tabs.Content value="chat" className="flex-1 min-h-0"><ChatView flow={flow} provider={provider} side="request" /></Tabs.Content>
+            )}
             {customTabs.request.map((fmt) => (
               <Tabs.Content
                 key={fmt}
@@ -145,7 +149,7 @@ export function DetailPane() {
             )}
             {provider !== 'unknown' && (
               // Chat 视图内部两列自带独立滚动，外层不要再 overflow-auto
-              <Tabs.Content value="chat" className="flex-1 min-h-0"><ChatView flow={flow} provider={provider} /></Tabs.Content>
+              <Tabs.Content value="chat" className="flex-1 min-h-0"><ChatView flow={flow} provider={provider} side="response" /></Tabs.Content>
             )}
             {customTabs.response.map((fmt) => (
               <Tabs.Content

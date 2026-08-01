@@ -71,6 +71,7 @@ export function parseOpenAI(flow: Flow): ChatSession {
           promptTokens: json.usage.prompt_tokens,
           completionTokens: json.usage.completion_tokens,
           totalTokens: json.usage.total_tokens,
+          cachedTokens: json.usage.prompt_tokens_details?.cached_tokens,
         };
       }
       const choice = json.choices?.[0];
@@ -113,6 +114,7 @@ export function parseOpenAI(flow: Flow): ChatSession {
           promptTokens: res.usage.prompt_tokens,
           completionTokens: res.usage.completion_tokens,
           totalTokens: res.usage.total_tokens,
+          cachedTokens: res.usage.prompt_tokens_details?.cached_tokens,
         };
       }
       const msg = res.choices?.[0]?.message;

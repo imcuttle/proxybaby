@@ -38,6 +38,8 @@ export function FlowContextMenu({
   const toggleMitmDisabledHost = useFlowStore((s) => s.toggleMitmDisabledHost);
   const selectedIds = useFlowStore((s) => s.selectedIds);
   const byId = useFlowStore((s) => s.byId);
+  const pinnedIds = useFlowStore((s) => s.pinnedIds);
+  const savedIds = useFlowStore((s) => s.savedIds);
   const [repeatOpen, setRepeatOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [ruleOpen, setRuleOpen] = useState(false);
@@ -61,6 +63,8 @@ export function FlowContextMenu({
   const multi = selectedFlows.length > 1;
   const n = selectedFlows.length;
   const labelN = multi ? ` ${n} 个` : '';
+  const allPinned = selectedFlows.length > 0 && selectedFlows.every((f) => pinnedIds[f.id]);
+  const allSaved = selectedFlows.length > 0 && selectedFlows.every((f) => savedIds[f.id]);
 
   const joinLines = (arr: string[]) => arr.filter(Boolean).join('\n');
   const bulkUrls = () => joinLines(selectedFlows.map((f) => f.request.url));
@@ -145,9 +149,11 @@ export function FlowContextMenu({
             </Item>
 
             <Sep />
-            <Item onSelect={() => applyBulk((f) => togglePin(f.id))}>置顶{labelN}</Item>
+            <Item onSelect={() => applyBulk((f) => togglePin(f.id))}>
+              {allPinned ? `取消置顶${labelN}` : `置顶${labelN}`}
+            </Item>
             <Item onSelect={() => applyBulk((f) => toggleSave(f.id))} shortcut="⇧⌘S">
-              保存{labelN} 请求
+              {allSaved ? `取消保存${labelN}` : `保存${labelN} 请求`}
             </Item>
 
             <ContextMenu.Sub>

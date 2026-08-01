@@ -165,7 +165,15 @@ export interface ChatSession {
   provider: 'openai' | 'anthropic' | 'acp' | 'unknown';
   model?: string;
   temperature?: number;
-  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    // 缓存命中（OpenAI: prompt_tokens_details.cached_tokens；Anthropic: cache_read_input_tokens）
+    cachedTokens?: number;
+    // Anthropic 独有：本轮写入缓存的 token 数
+    cacheCreationTokens?: number;
+  };
   messages: ChatMessage[];
   tools?: ChatToolDefinition[];   // 请求侧声明的可调用工具定义
   streaming: boolean;

@@ -1,19 +1,36 @@
 # proxybaby
 
+## 0.4.0
+
+### 新特性
+
+- **OpenAI / Anthropic 视图请求响应分栏**：Request tab 和 Response tab 都会显示 chat 视图，分别只展示输入 messages 和输出 messages（不再挤在同一个视图里）。
+- **消息 Markdown 一键复制**：ChatView 每条消息 hover 后右上角出现复制按钮，复制 reasoning + content + tool calls 的合并 Markdown。
+- **缓存命中可视化**：SessionMeta 里显示 `缓存 N (X%)` 徽标——OpenAI 用 `prompt_tokens_details.cached_tokens`，Anthropic 兼容 `cache_read_input_tokens` 和 `cache_creation_input_tokens`。
+- **JsonTree 值也支持 hover 复制**：叶子节点 hover 显示复制按钮，字符串按原文复制，其他类型按 `JSON.stringify` 结果复制。
+- **快速规则子菜单显示已有规则并支持切换启停**：右键 → 快速规则，顶部列出当前 pattern 命中的临时规则，checkbox 切换启用/禁用（底层等价规则集级别 `setEnabled`，不再是删除），子菜单头显示"生效/总数"徽标。
+
+### 改进
+
+- **FlowContextMenu "置顶/保存" label 反映当前状态**：已置顶/已保存时显示"取消置顶/取消保存"，多选按 all-selected 判断。
+- **PinnedTree 已置顶行 header 缩进对齐**：Pin 图标与 Saved 的 Bookmark 图标同列。
+- **右键菜单快捷键字体加大**（text-xs → 13px + tracking），贴近 macOS 系统菜单风格。
+- **Radix Popper 首帧闪现修复**：全局 CSS 兜底，未定位完成的 Content 全部透明不可交互。
+
 ## 0.3.3
 
 ### 修复
 
 - **右键菜单/Popover 首帧闪到左上角**：Radix Popper 只在 useLayoutEffect 完成测量后才在 Content 上写入 `data-side`，未测量前可能出现"闪一下"的旧位置。加了一层全局 CSS 兜底：未定位完成的 Content 全部透明且不可交互。
 
-## 0.3.2
+## ## 0.3.2
 
 ### 改进
 
 - **已置顶树右键复用完整菜单**：置顶的 App/Host/Path 现在使用与正常侧栏一致的完整右键菜单（置顶/取消置顶、SSL、抓包过滤、快速规则、导出、删除…），不再是右键就取消置顶。
 - **置顶 App 支持展开子树**：置顶的应用展开后显示该 app 关联的 host 子节点，host 再可展开显示 subpath——与正常「应用程序」分组的行为一致。
 
-## ## 0.3.1
+## ## ## 0.3.1
 
 ### 修复
 
@@ -23,7 +40,7 @@
 
 - **收藏夹「已置顶」改为树状展开**：展开后按分组显示置顶的应用和域名，域名节点可再展开显示置顶的路径前缀。子节点点击切换 filter，右键取消置顶。
 
-## ## ## 0.3.0
+## ## ## ## 0.3.0
 
 ### 新特性
 
@@ -40,7 +57,7 @@
 - 新增 `tests/unit/record-filter.test.ts`（11 个用例覆盖 shouldRecord / shouldDecrypt / URL glob / disabled）。
 - 更新 e2e：`过滤配置窗口：录制过滤添加 App 维度条目`、`侧栏右键：将域名加入抓包排除/包含列表（record-filter）`。
 
-## ## ## ## 0.2.0
+## ## ## ## ## 0.2.0
 
 ### ✨ 新功能
 
@@ -54,7 +71,7 @@
 
 - chore(release): `/release` 命令全流程自动化，前置检查通过后无中间确认直接 bump + tag + push (`99611db`)
 
-## ## ## ## ## 0.1.0
+## ## ## ## ## ## 0.1.0
 
 首次发布 🎉
 

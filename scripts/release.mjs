@@ -92,9 +92,12 @@ fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 const notes = fs.readFileSync(notesPath, 'utf8').trim();
 const clPath = path.resolve('CHANGELOG.md');
 const oldChangelog = fs.existsSync(clPath) ? fs.readFileSync(clPath, 'utf8') : '# proxybaby\n\n';
-const [header, ...rest] = oldChangelog.split(/\n(?=## )/);
-const newSection = `## ${next}\n\n${notes}\n`;
-const nextChangelog = `${header.trimEnd()}\n\n${newSection}\n${rest.join('\n## ')}`.replace(/\n{3,}/g, '\n\n');
+// 用行首二级标题 `^## ` 切段（lookahead 保留分隔符不被吃掉）；对每段各自 trimEnd 再拼回。
+// 注意：`^## ` 必须严格锚定行首二级标题，避免匹配 `notes` 里的 `### ` 三级标题。
+const sections = oldChangelog.split(/\n(?=^## )/m);
+const header = sections.shift() ?? '# proxybaby\n';
+const newSection = `## ${next}\n\n${notes}`;
+const nextChangelog = [header.trimEnd(), newSection, ...sections.map((s) => s.trimEnd())].join('\n\n') + '\n';
 fs.writeFileSync(clPath, nextChangelog);
 
 console.log('✏️  package.json + CHANGELOG.md updated.\n');

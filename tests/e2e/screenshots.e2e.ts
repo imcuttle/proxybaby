@@ -120,12 +120,22 @@ test('inject flows + take screenshots', async () => {
       { event: 'flow:end', payload: { id: 'fx-6', durationMs: 41, status: 'completed' } },
     ],
   );
-  // AI 明星流：OpenAI 流式
+  // AI 明星流：OpenAI 流式（同时带 Session/Turn header 供 AI Sessions 视图聚合）
   await injectFlow(
     {
       id: 'fx-ai', status: 'completed', isTLS: true, sseFrames: [],
       app: { name: 'Google Chrome', pid: 501 },
-      request: { method: 'POST', url: 'https://api.openai.com/v1/chat/completions', host: 'api.openai.com', path: '/v1/chat/completions', scheme: 'https', httpVersion: '2.0', headers: [], bodySize: 0, startedAt: now - 2000, contentType: 'application/json', bodyText: JSON.stringify({ model: 'gpt-4o', stream: true, messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: '用一句话解释什么是 MITM 代理' }] }) },
+      request: {
+        method: 'POST', url: 'https://api.openai.com/v1/chat/completions', host: 'api.openai.com',
+        path: '/v1/chat/completions', scheme: 'https', httpVersion: '2.0',
+        headers: [
+          { name: 'Authorization', value: 'Bearer sk-***' },
+          { name: 'X-Session-Id', value: 'sess-chat-openai-001' },
+          { name: 'X-Root-Request-Id', value: 'req-openai-t1' },
+        ],
+        bodySize: 0, startedAt: now - 2000, contentType: 'application/json',
+        bodyText: JSON.stringify({ model: 'gpt-4o', stream: true, messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: '用一句话解释什么是 MITM 代理' }] }),
+      },
     },
     [
       { event: 'flow:response-headers', payload: { id: 'fx-ai', response: { status: 200, statusText: 'OK', httpVersion: '2.0', headers: [{ name: 'Content-Type', value: 'text/event-stream' }], bodySize: 0, isSSE: true, contentType: 'text/event-stream' } } },
@@ -134,19 +144,50 @@ test('inject flows + take screenshots', async () => {
       { event: 'flow:end', payload: { id: 'fx-ai', durationMs: 620, status: 'completed' } },
     ],
   );
-  // Anthropic 带 tool_use
+  // Anthropic 带 tool_use（headers 里带 anthropic-version 让 detectProvider 稳定识别）
   await injectFlow(
     {
       id: 'fx-anth', status: 'completed', isTLS: true, sseFrames: [],
       app: { name: 'node', pid: 302 },
-      request: { method: 'POST', url: 'https://api.anthropic.com/v1/messages', host: 'api.anthropic.com', path: '/v1/messages', scheme: 'https', httpVersion: '2.0', headers: [], bodySize: 0, startedAt: now - 1500, contentType: 'application/json', bodyText: JSON.stringify({ model: 'claude-3-5-sonnet', messages: [{ role: 'user', content: '帮我查一下今天北京天气' }] }) },
+      request: {
+        method: 'POST', url: 'https://api.anthropic.com/v1/messages', host: 'api.anthropic.com',
+        path: '/v1/messages', scheme: 'https', httpVersion: '2.0',
+        headers: [
+          { name: 'anthropic-version', value: '2023-06-01' },
+          { name: 'x-api-key', value: 'sk-ant-***' },
+          { name: 'X-Session-Id', value: 'sess-chat-anth-42' },
+          { name: 'X-Root-Request-Id', value: 'req-anth-t1' },
+        ],
+        bodySize: 0, startedAt: now - 1500, contentType: 'application/json',
+        bodyText: JSON.stringify({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 1024,
+          system: '你是一个乐于助人的中文助手。',
+          tools: [
+            {
+              name: 'get_weather',
+              description: '查询指定城市的当前天气',
+              input_schema: {
+                type: 'object',
+                properties: { city: { type: 'string', description: '城市名称' } },
+                required: ['city'],
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: '帮我查一下今天北京天气' }],
+        }),
+      },
     },
     [
       { event: 'flow:response-headers', payload: { id: 'fx-anth', response: { status: 200, statusText: 'OK', httpVersion: '2.0', headers: [{ name: 'Content-Type', value: 'text/event-stream' }], bodySize: 0, isSSE: true, contentType: 'text/event-stream' } } },
-      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { data: `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}`, raw: '', receivedAt: Date.now() } } },
-      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { data: `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '好的，我调用天气工具查询。' } })}`, raw: '', receivedAt: Date.now() } } },
-      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { data: `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} } })}`, raw: '', receivedAt: Date.now() } } },
-      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { data: `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"city":"Beijing"}' } })}`, raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'message_start', data: JSON.stringify({ type: 'message_start', message: { id: 'msg_01', model: 'claude-3-5-sonnet-20241022', role: 'assistant', content: [], usage: { input_tokens: 78, output_tokens: 0 } } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'content_block_start', data: JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'content_block_delta', data: JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '用户想查北京天气，我需要调用 get_weather 工具。' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'content_block_start', data: JSON.stringify({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'content_block_delta', data: JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '好的，我调用天气工具帮你查一下北京当前天气。' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'content_block_start', data: JSON.stringify({ type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'toolu_01ABC', name: 'get_weather', input: {} } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'content_block_delta', data: JSON.stringify({ type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"city":"Beijing"}' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth', frame: { event: 'message_delta', data: JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 42 } }), raw: '', receivedAt: Date.now() } } },
       { event: 'flow:end', payload: { id: 'fx-anth', durationMs: 480, status: 'completed' } },
     ],
   );
@@ -164,6 +205,113 @@ test('inject flows + take screenshots', async () => {
     ],
   );
 
+  // 同一 Anthropic session 的第二轮：tool_result → 最终回复（供 AI Sessions 树展示多 turn）
+  await injectFlow(
+    {
+      id: 'fx-anth-2', status: 'completed', isTLS: true, sseFrames: [],
+      app: { name: 'node', pid: 302 },
+      request: {
+        method: 'POST', url: 'https://api.anthropic.com/v1/messages', host: 'api.anthropic.com',
+        path: '/v1/messages', scheme: 'https', httpVersion: '2.0',
+        headers: [
+          { name: 'anthropic-version', value: '2023-06-01' },
+          { name: 'x-api-key', value: 'sk-ant-***' },
+          { name: 'X-Session-Id', value: 'sess-chat-anth-42' },
+          { name: 'X-Root-Request-Id', value: 'req-anth-t2' },
+        ],
+        bodySize: 0, startedAt: now - 900, contentType: 'application/json',
+        bodyText: JSON.stringify({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 1024,
+          system: '你是一个乐于助人的中文助手。',
+          messages: [
+            { role: 'user', content: '帮我查一下今天北京天气' },
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: '好的，我调用天气工具帮你查一下北京当前天气。' },
+                { type: 'tool_use', id: 'toolu_01ABC', name: 'get_weather', input: { city: 'Beijing' } },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                { type: 'tool_result', tool_use_id: 'toolu_01ABC', content: '{"city":"Beijing","temp":24,"weather":"晴","humidity":45}' },
+              ],
+            },
+          ],
+        }),
+      },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'fx-anth-2', response: { status: 200, statusText: 'OK', httpVersion: '2.0', headers: [{ name: 'Content-Type', value: 'text/event-stream' }], bodySize: 0, isSSE: true, contentType: 'text/event-stream' } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth-2', frame: { event: 'content_block_start', data: JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:sse-frame', payload: { id: 'fx-anth-2', frame: { event: 'content_block_delta', data: JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '北京今天晴，气温 24°C，湿度 45%，是个不错的出行天气。' } }), raw: '', receivedAt: Date.now() } } },
+      { event: 'flow:end', payload: { id: 'fx-anth-2', durationMs: 320, status: 'completed' } },
+    ],
+  );
+
+  // OpenAI 第二轮（同一 session，另一 root）：让 AI Sessions 树上出现 openai session 有 2 轮
+  await injectFlow(
+    {
+      id: 'fx-ai-2', status: 'completed', isTLS: true, sseFrames: [],
+      app: { name: 'Google Chrome', pid: 501 },
+      request: {
+        method: 'POST', url: 'https://api.openai.com/v1/chat/completions', host: 'api.openai.com',
+        path: '/v1/chat/completions', scheme: 'https', httpVersion: '2.0',
+        headers: [
+          { name: 'Authorization', value: 'Bearer sk-***' },
+          { name: 'X-Session-Id', value: 'sess-chat-openai-001' },
+          { name: 'X-Root-Request-Id', value: 'req-openai-t2' },
+        ],
+        bodySize: 0, startedAt: now - 700, contentType: 'application/json',
+        bodyText: JSON.stringify({ model: 'gpt-4o', stream: false, messages: [{ role: 'user', content: '再举一个抓包工具能解决的实际场景' }] }),
+      },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'fx-ai-2', response: { status: 200, statusText: 'OK', httpVersion: '2.0', headers: [{ name: 'Content-Type', value: 'application/json' }], bodySize: 0, isSSE: false, contentType: 'application/json' } } },
+      { event: 'flow:response-body', payload: { id: 'fx-ai-2', bodyText: JSON.stringify({
+        id: 'chatcmpl-2', model: 'gpt-4o',
+        choices: [{ index: 0, message: { role: 'assistant', content: '例如后端接口未就绪时，用 mock 规则先返回假数据，前端可并行开发。' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 120, completion_tokens: 34, total_tokens: 154 },
+      }, null, 2), bodySize: 180 } },
+      { event: 'flow:end', payload: { id: 'fx-ai-2', durationMs: 240, status: 'completed' } },
+    ],
+  );
+
+  // 加两条示例 whistle 规则集，让规则页不空
+  await page.evaluate(async () => {
+    const api = (window as any).proxybaby;
+    await api.rulesAdd(
+      '开发环境 · mock',
+      [
+        '# 场景：后端接口未就绪，前端 mock 假数据',
+        'api.demo.com/users/list  mock://{"data":[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]}',
+        '',
+        '# 场景：模拟登录态过期',
+        'api.demo.com/user/me     statusCode://401 resBody://{"error":"TOKEN_EXPIRED"}',
+        '',
+        '# 场景：给静态资源加延迟',
+        '*.demo.com/static/*      resDelay://500',
+      ].join('\n'),
+      true,
+    );
+    await api.rulesAdd(
+      '本地开发劫持',
+      [
+        '# 生产域名 → 本地开发',
+        'api.mycompany.com        host://127.0.0.1:3000',
+        '',
+        '# 加日志',
+        'api.mycompany.com/pay    log://pay-trace',
+        '',
+        '# 断点调试',
+        'api.mycompany.com/order  breakpoint://response',
+      ].join('\n'),
+      true,
+    );
+  });
+
   await page.waitForTimeout(600);
 
   // 1. 主界面
@@ -173,17 +321,35 @@ test('inject flows + take screenshots', async () => {
   await page.screenshot({ path: path.join(outDir, '01-main.png') });
   console.log('shot 01-main.png');
 
-  // 2. AI OpenAI
+  // 2. AI OpenAI —— 请求侧 + 响应侧都点开 chat view
   await page.locator('[data-testid="flow-row"][data-flow-id="fx-ai"]').click();
-  await page.getByRole('tab', { name: 'OpenAI' }).click().catch(() => {});
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(200);
+  {
+    // 请求侧 chat
+    const reqTabs = page.getByRole('tab', { name: /openai/i });
+    if (await reqTabs.count()) await reqTabs.first().click().catch(() => {});
+    await page.waitForTimeout(150);
+    // 响应侧 chat（可能有 2 个 OpenAI tab：请求侧 + 响应侧；点第二个）
+    const allTabs = page.getByRole('tab', { name: /openai/i });
+    const cnt = await allTabs.count();
+    if (cnt > 1) await allTabs.nth(cnt - 1).click().catch(() => {});
+  }
+  await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(outDir, '02-ai-openai.png') });
   console.log('shot 02-ai-openai.png');
 
   // 3. AI Anthropic
   await page.locator('[data-testid="flow-row"][data-flow-id="fx-anth"]').click();
-  await page.getByRole('tab', { name: 'Anthropic' }).click().catch(() => {});
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(200);
+  {
+    const reqTabs = page.getByRole('tab', { name: /anthropic/i });
+    if (await reqTabs.count()) await reqTabs.first().click().catch(() => {});
+    await page.waitForTimeout(150);
+    const allTabs = page.getByRole('tab', { name: /anthropic/i });
+    const cnt = await allTabs.count();
+    if (cnt > 1) await allTabs.nth(cnt - 1).click().catch(() => {});
+  }
+  await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(outDir, '03-ai-anthropic.png') });
   console.log('shot 03-ai-anthropic.png');
 
@@ -194,9 +360,54 @@ test('inject flows + take screenshots', async () => {
   await page.screenshot({ path: path.join(outDir, '04-websocket.png') });
   console.log('shot 04-websocket.png');
 
-  // 5. 规则页
+  // 5. 规则页 —— 打开规则 tab 并选中第一个规则集，让编辑器显示内容
   await page.getByRole('button', { name: '规则', exact: true }).click().catch(() => {});
+  await page.waitForTimeout(400);
+  // 点第一个规则集条目（RulesView 里规则集左栏是普通 button，用文本定位）
+  {
+    const item = page.getByText('开发环境 · mock', { exact: false }).first();
+    if (await item.count()) await item.click().catch(() => {});
+  }
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(outDir, '05-rules.png') });
   console.log('shot 05-rules.png');
+
+  // 6. AI Sessions 独立子窗口
+  // 先切回抓包页面，再触发主窗口打开 ai-session 子窗口
+  await page.getByRole('button', { name: '抓包', exact: true }).click().catch(() => {});
+  await page.waitForTimeout(200);
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.openWindow('ai-session', {
+      title: 'ProxyBaby · AI Sessions',
+      width: 1200,
+      height: 780,
+    });
+  });
+  // 等新窗口出现
+  let sessionWin: Page | null = null;
+  for (let i = 0; i < 40; i++) {
+    const wins = app.windows();
+    sessionWin = wins.find((w) => w !== page) || null;
+    if (sessionWin) break;
+    await page.waitForTimeout(150);
+  }
+  if (sessionWin) {
+    await sessionWin.waitForLoadState('domcontentloaded');
+    await sessionWin.waitForSelector('[data-testid="ai-session-window"]', { timeout: 8000 }).catch(() => {});
+    await sessionWin.waitForTimeout(600);
+    // 点选一个 request 以填充右侧预览
+    const req = sessionWin.locator('[data-testid="ai-request-row"], [data-testid="request-ref-row"]').first();
+    if (await req.count().catch(() => 0)) {
+      await req.click().catch(() => {});
+    } else {
+      // 兜底：点第一条 turn row
+      const turn = sessionWin.locator('[data-testid="ai-turn-row"]').first();
+      if (await turn.count()) await turn.click().catch(() => {});
+    }
+    await sessionWin.waitForTimeout(500);
+    await sessionWin.screenshot({ path: path.join(outDir, '06-ai-sessions.png') });
+    console.log('shot 06-ai-sessions.png');
+  } else {
+    console.log('⚠️  AI Sessions window did not appear; skipping 06-ai-sessions.png');
+  }
 });

@@ -52,13 +52,13 @@
 <img src="docs/screenshots/01-main.png" />
 </td>
 <td width="50%">
-<b>AI 会话美化（OpenAI）</b><br/>
+<b>AI 会话美化（OpenAI）· 请求 ↔ 响应 分栏</b><br/>
 <img src="docs/screenshots/02-ai-openai.png" />
 </td>
 </tr>
 <tr>
 <td width="50%">
-<b>AI 会话美化（Anthropic + tool_use）</b><br/>
+<b>AI 会话美化（Anthropic + thinking + tool_use）</b><br/>
 <img src="docs/screenshots/03-ai-anthropic.png" />
 </td>
 <td width="50%">
@@ -67,9 +67,13 @@
 </td>
 </tr>
 <tr>
-<td colspan="2">
+<td width="50%">
 <b>whistle 规则编辑器</b><br/>
 <img src="docs/screenshots/05-rules.png" />
+</td>
+<td width="50%">
+<b>AI Sessions —— Session/Turn/Request 三级视图</b><br/>
+<img src="docs/screenshots/06-ai-sessions.png" />
 </td>
 </tr>
 </table>
@@ -138,7 +142,7 @@
 
 **UI**：三栏布局 + 虚拟滚动几万条不卡 · 侧栏按 App/Host+subpath 树状分组 · Pin/Save 独立视图 · 高级过滤器（多条件 AND + 预设） · 详情面板 JSON Tree/Hex/Form/Multipart/GraphQL/Image 多格式 · Monaco 编辑器 · 大文本懒渲染 · 复制 cURL
 
-**AI 会话美化**（核心差异）：OpenAI `chat/completions` · Anthropic `v1/messages`（`tool_use`/`thinking`） · ACP · 角色分色气泡 · 工具调用可视化 · 打字机式流式渲染 · 内嵌 AI 侧边栏（跑 `codebuddy --acp`）
+**AI 会话美化**（核心差异）：OpenAI `chat/completions` · Anthropic `v1/messages`（`tool_use`/`thinking`） · ACP · 角色分色气泡 · 工具调用可视化 · 打字机式流式渲染 · 内嵌 AI 侧边栏（跑 `codebuddy --acp`） · **AI Sessions 独立窗口** —— 按 `X-Session-Id` + `X-Root-Request-Id` 请求头把多轮请求聚合成 Session → Turn → Request 三级视图，跨窗口选中联动主列表
 
 **规则改写**：洋葱式中间件（`respond` 短路 / `abort` 中断） · 100% whistle 兼容 · 18+ 操作符：`statusCode` `redirect` `abort` `reqHeaders` `resHeaders` `reqBody` `resBody` `host` `file` `mock` `reqDelay` `resDelay` `log` `ua` `referer` `script` `breakpoint` · 多规则集 · **侧栏右键快速规则**（一键 abort/CORS/mapLocal/mapRemote/mock/statusCode/resDelay/resBody，自动写入独立"临时规则"sub-tab，单条可开关、可清空） · 插件系统（whistle-rules / mock / logger / breakpoint / allow-block / ssl-list / scripts）
 

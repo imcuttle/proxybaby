@@ -687,7 +687,7 @@ function setupIpc() {
   ipcMain.handle('ruleQuickInput:open', (_e, params: any) => {
     pendingRuleQuickInputParams = params;
     openChildWindow('rule-quick-input', {
-      title: `快速规则 · ${params?.label || ''}`,
+      title: `规则 · ${params?.label || ''}`,
       width: 540,
       height: 340,
     });

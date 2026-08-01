@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import * as Collapsible from '@radix-ui/react-collapsible';
 import * as ContextMenu from '@radix-ui/react-context-menu';
-import { ChevronDown, ChevronRight, Globe, Package, Pin, Bookmark, PanelLeftClose, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Globe, Package, Pin, Bookmark, PanelLeftClose } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { cn } from '../lib/cn';
 import { isFlowPinned } from '../lib/filter';
-import type { FilterKind, FilterEntry, RuleQuickInputParams } from '../../shared/types';
+import type { FilterKind, FilterEntry } from '../../shared/types';
+import {
+  QuickRuleSubMenu,
+  DEFAULT_QUICK_RULE_PRESETS,
+  applyQuickRule as sharedApplyQuickRule,
+  openCustomRule as sharedOpenCustomRule,
+  type QuickRulePreset,
+} from './QuickRuleSubMenu';
 
 export function Sidebar() {
   const flows = useFlowStore((s) => s.flows);
@@ -218,44 +225,9 @@ export function Sidebar() {
    * 快速规则：无参数的立即写入（abort / CORS）；有参数的打开子窗口。
    * pattern 生成规则：host 右键 → `<host>`；subpath 右键 → `<host><path>*`。
    */
-  const quickRulePresets: QuickRulePreset[] = [
-    { key: 'abort',     label: '禁止访问',       kind: 'immediate', operator: 'abort',  value: '' },
-    { key: 'cors',      label: '一键 CORS',      kind: 'immediate', operator: 'raw',    value: 'resHeaders://{"Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"*","Access-Control-Allow-Headers":"*","Access-Control-Expose-Headers":"*"}' },
-    { key: 'mapLocal',  label: '本地映射…',      kind: 'input', operator: 'mapLocal',  inputKind: 'file',     placeholder: '本地文件绝对路径' },
-    { key: 'mapRemote', label: '远程映射…',      kind: 'input', operator: 'mapRemote', inputKind: 'text',     placeholder: 'http://target.example.com' },
-    { key: 'mock',      label: '返回 Mock JSON…', kind: 'input', operator: 'mock',      inputKind: 'textarea', placeholder: '{"key":"value"}' },
-    { key: 'statusCode',label: '状态码替换…',    kind: 'input', operator: 'statusCode',inputKind: 'number',   placeholder: '如 404' },
-    { key: 'resDelay',  label: '响应延迟…',      kind: 'input', operator: 'resDelay',  inputKind: 'number',   placeholder: '毫秒' },
-    { key: 'resBody',   label: '重写响应体…',    kind: 'input', operator: 'resBody',   inputKind: 'textarea', placeholder: '响应体文本' },
-  ];
-
-  const applyQuickRule = async (pattern: string, preset: QuickRulePreset) => {
-    if (preset.kind === 'immediate') {
-      try {
-        await window.proxybaby.rulesQuickAdd({ pattern, operator: preset.operator, value: preset.value });
-      } catch {}
-      return;
-    }
-    // 参数化：打开子窗口
-    const params: RuleQuickInputParams = {
-      operator: preset.operator,
-      pattern,
-      label: preset.label.replace(/…$/, ''),
-      inputKind: preset.inputKind,
-      placeholder: preset.placeholder,
-    };
-    try {
-      await window.proxybaby.ruleQuickInputOpen(params);
-    } catch {}
-  };
-
-  const openCustomRule = async (pattern: string) => {
-    try {
-      await window.proxybaby.rulesQuickAddCustom({ pattern });
-      // 切到规则页
-      window.proxybaby.broadcast('nav:goto', { page: 'rules' });
-    } catch {}
-  };
+  const quickRulePresets: QuickRulePreset[] = DEFAULT_QUICK_RULE_PRESETS;
+  const applyQuickRule = sharedApplyQuickRule;
+  const openCustomRule = sharedOpenCustomRule;
 
   const revealInFinder = (bundlePath?: string) => {
     if (!bundlePath) return;
@@ -1010,124 +982,7 @@ function SubpathContextMenu({
   );
 }
 
-/** 快速规则子菜单（host / subpath 共用）*/
-type QuickRulePreset = {
-  key: string;
-  label: string;
-} & (
-  | { kind: 'immediate'; operator: string; value: string }
-  | { kind: 'input'; operator: 'mapLocal' | 'mapRemote' | 'mock' | 'statusCode' | 'resDelay' | 'resBody'; inputKind: 'text' | 'textarea' | 'number' | 'file'; placeholder?: string }
-);
-
-function QuickRuleSubMenu({
-  pattern,
-  presets,
-  onApply,
-  onOpenCustom,
-}: {
-  pattern: string;
-  presets: QuickRulePreset[];
-  onApply: (pattern: string, preset: QuickRulePreset) => void;
-  onOpenCustom: (pattern: string) => void;
-}) {
-  const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
-  const trigCls = 'flex items-center px-3 py-1.5 text-pb-text hover:bg-pb-hover data-[state=open]:bg-pb-hover cursor-default outline-none';
-  // 匹配此 pattern 的已有临时规则集，用于展示状态 + 切换启停 / 删除
-  const [existing, setExisting] = useState<{ id: string; name: string; enabled: boolean }[]>([]);
-  const refresh = async () => {
-    try {
-      const list = await window.proxybaby.rulesList();
-      const hit = list
-        .filter((rs: any) => rs.temporary && rs.rules?.some((r: any) => r.pattern === pattern))
-        .map((rs: any) => ({ id: rs.id, name: rs.name, enabled: rs.enabled }));
-      setExisting(hit);
-    } catch {}
-  };
-  useEffect(() => {
-    refresh();
-    const off = window.proxybaby.onEvent('rules:changed' as any, () => refresh());
-    return () => off();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pattern]);
-  const toggle = async (id: string, enabled: boolean) => {
-    try { await window.proxybaby.rulesSetEnabled(id, !enabled); } catch {}
-  };
-  const remove = async (id: string) => {
-    try { await window.proxybaby.rulesRemove(id); } catch {}
-  };
-  return (
-    <ContextMenu.Sub>
-      <ContextMenu.SubTrigger className={trigCls}>
-        <span className="flex-1">
-          快速规则
-          {existing.length > 0 && (
-            <span className="ml-2 text-[10px] text-pb-accent">
-              ({existing.filter((r) => r.enabled).length}/{existing.length} 生效)
-            </span>
-          )}
-        </span>
-        <span className="text-pb-muted">▸</span>
-      </ContextMenu.SubTrigger>
-      <ContextMenu.Portal>
-        <ContextMenu.SubContent className="min-w-[240px] rounded-md border border-pb-border bg-pb-panel py-1 text-xs shadow-xl z-50">
-          {existing.length > 0 && (
-            <>
-              <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-pb-muted">已有规则</div>
-              {existing.map((r) => (
-                <div
-                  key={r.id}
-                  className="flex items-center gap-2 px-3 py-1 hover:bg-pb-hover cursor-default select-none"
-                  data-testid={`quick-rule-existing-${r.id}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={r.enabled}
-                    onChange={() => toggle(r.id, r.enabled)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <span
-                    className={cn('flex-1 truncate', r.enabled ? 'text-pb-text' : 'text-pb-muted line-through')}
-                    title={r.name}
-                    onClick={() => toggle(r.id, r.enabled)}
-                  >
-                    {r.name.replace(/^\[临时\]\s*/, '')}
-                  </span>
-                  <button
-                    className="text-pb-muted hover:text-pb-error"
-                    title="删除此规则"
-                    onClick={(e) => { e.stopPropagation(); remove(r.id); }}
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </div>
-              ))}
-              <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-              <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-pb-muted">新增</div>
-            </>
-          )}
-          {presets.map((p) => (
-            <ContextMenu.Item
-              key={p.key}
-              className={itemCls}
-              onSelect={() => onApply(pattern, p)}
-              data-testid={`quick-rule-${p.key}`}
-            >
-              <span className="flex-1">{p.label}</span>
-            </ContextMenu.Item>
-          ))}
-          <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
-          <ContextMenu.Item
-            className={itemCls}
-            onSelect={() => onOpenCustom(pattern)}
-            data-testid="quick-rule-custom"
-          >
-            <span className="flex-1">自定义规则…</span>
-          </ContextMenu.Item>
-        </ContextMenu.SubContent>
-      </ContextMenu.Portal>
-    </ContextMenu.Sub>
-  );
-}
+/** 快速规则子菜单已抽离至 ./QuickRuleSubMenu.tsx（Sidebar / FlowContextMenu 共用） */
 
 
 function PinnedTree({

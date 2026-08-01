@@ -906,18 +906,26 @@ test('侧栏右键：已置顶树下的 host 右键"取消置顶"，一次性清
   expect(Object.keys(state.paths).some((p) => p.startsWith('api.demo.com/'))).toBe(false);
 });
 
-test('侧栏右键：快速规则 → 禁止访问，生成临时规则', async () => {
+test('侧栏右键：规则 → 禁止访问，生成临时规则；再点即删除（toggle）', async () => {
   await resetFilters();
   // 清空临时规则
   await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
   const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
   await hostRow.click({ button: 'right' });
-  await page.getByText('快速规则').click();
+  await page.locator('[data-testid="quick-rule-trigger"]').click();
   await page.locator('[data-testid="quick-rule-abort"]').click();
   const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
   const temps = list.filter((s: any) => s.temporary);
   expect(temps.length).toBeGreaterThanOrEqual(1);
   expect(temps.some((s: any) => s.text.includes('api.demo.com') && s.text.includes('abort'))).toBe(true);
+  // 再次右键 → 规则 → 该 preset 应显示 active，再点即删除
+  await hostRow.click({ button: 'right' });
+  await page.locator('[data-testid="quick-rule-trigger"]').click();
+  const abortItem = page.locator('[data-testid="quick-rule-abort"]');
+  await expect(abortItem).toHaveAttribute('data-active', 'true');
+  await abortItem.click({ force: true });
+  const list2 = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
+  expect(list2.filter((s: any) => s.temporary && s.text.includes('api.demo.com') && s.text.includes('abort')).length).toBe(0);
 });
 
 test('侧栏右键：自定义规则 → 跳规则页 + 临时 sub-tab 出现，编辑器聚焦', async () => {
@@ -925,7 +933,7 @@ test('侧栏右键：自定义规则 → 跳规则页 + 临时 sub-tab 出现，
   await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
   const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
   await hostRow.click({ button: 'right' });
-  await page.getByText('快速规则').click();
+  await page.locator('[data-testid="quick-rule-trigger"]').click();
   await page.locator('[data-testid="quick-rule-custom"]').click();
   // 应切到规则页
   await expect(page.locator('[data-testid="rules-mode-tabs"]')).toBeVisible();
@@ -935,6 +943,28 @@ test('侧栏右键：自定义规则 → 跳规则页 + 临时 sub-tab 出现，
   const custom = list.find((s: any) => s.temporary && s.name === '[临时] 自定义');
   expect(custom).toBeTruthy();
   expect(custom.text.includes('api.demo.com')).toBe(true);
+});
+
+test('抓包列表右键：规则 → 禁止访问，pattern 为 host+path 且可 toggle 删除', async () => {
+  await page.getByRole('button', { name: '抓包' }).click();
+  await resetFilters();
+  await ensureBaseFlows();
+  await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
+  const row = page.locator('[data-testid="flow-row"][data-flow-id="f-http"]');
+  await row.click({ button: 'right' });
+  await page.locator('[data-testid="quick-rule-trigger"]').click();
+  await page.locator('[data-testid="quick-rule-abort"]').click();
+  const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
+  const hit = list.filter((s: any) => s.temporary && s.text.includes('api.demo.com/users') && s.text.includes('abort'));
+  expect(hit.length).toBeGreaterThanOrEqual(1);
+  // 再次右键 → ✓ → 再点即删除
+  await row.click({ button: 'right' });
+  await page.locator('[data-testid="quick-rule-trigger"]').click();
+  const abortItem = page.locator('[data-testid="quick-rule-abort"]');
+  await expect(abortItem).toHaveAttribute('data-active', 'true');
+  await abortItem.click({ force: true });
+  const list2 = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
+  expect(list2.filter((s: any) => s.temporary && s.text.includes('api.demo.com/users') && s.text.includes('abort')).length).toBe(0);
 });
 
 test('规则页临时 sub-tab: 清空按钮工作', async () => {

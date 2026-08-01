@@ -5,6 +5,7 @@ import { useFlowStore } from '../store/flows';
 import {
   toCurl, rawExchange, headersText, cookiesFromHeaders, toMarkdownTable, toCSV,
 } from '../lib/flow-serialize';
+import { QuickRuleSubMenu } from './QuickRuleSubMenu';
 
 const HIGHLIGHT_COLORS = [
   { key: 'red', label: '红', className: 'bg-red-500' },
@@ -125,6 +126,7 @@ export function FlowContextMenu({
             >
               过滤此主机
             </Item>
+            {!multi && <QuickRuleSubMenu pattern={`${host}${flow.request.path.split('?')[0]}`} />}
 
             <Sep />
             <Item onSelect={() => applyBulk((f) => { api.flowRepeat(f.id); })} shortcut="⌘↩">

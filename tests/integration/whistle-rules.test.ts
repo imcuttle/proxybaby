@@ -96,6 +96,42 @@ describe('whistle rules — 经代理端到端生效', () => {
     expect(JSON.parse(r.body).real).toBeUndefined();
   });
 
+  it('mock:// 短路：事件顺序 flow:start → flow:response-headers → flow:response-body → flow:end；flow.edited=true', async () => {
+    const events: { name: string; payload: any }[] = [];
+    // 重新 setup，本 case 需要拿 proxy 引用挂 listener
+    const target = http.createServer((_req, res) => { res.writeHead(200); res.end('real'); });
+    await new Promise<void>((r) => target.listen(0, '127.0.0.1', r));
+    const tp = (target.address() as any).port;
+    const eng = new RuleEngine();
+    eng.add('e2e', '127.0.0.1/m  mock://{"a":1}', true);
+    const pm = new PluginManager(eng);
+    const proxy = new ProxyServer({ host: '127.0.0.1', port: 0, plugins: pm });
+    await proxy.start();
+    const pp = (proxy as any).server.address().port;
+    cleanups.push(async () => { await proxy.stop(); target.close(); });
+
+    for (const name of ['flow:start', 'flow:response-headers', 'flow:response-body', 'flow:end']) {
+      (proxy as any).on(name, (payload: any) => events.push({ name, payload }));
+    }
+    const r = await httpViaProxy(pp, `http://127.0.0.1:${tp}/m`);
+    expect(JSON.parse(r.body).a).toBe(1);
+
+    const names = events.map((e) => e.name);
+    expect(names.indexOf('flow:start')).toBeLessThan(names.indexOf('flow:response-headers'));
+    expect(names.indexOf('flow:response-headers')).toBeLessThan(names.indexOf('flow:response-body'));
+    expect(names.indexOf('flow:response-body')).toBeLessThan(names.indexOf('flow:end'));
+
+    // 已编辑标记：flow:start 事件里的 flow 已经带上 edited/matchedRules
+    const startFlow = events.find((e) => e.name === 'flow:start')!.payload;
+    expect(startFlow.edited).toBe(true);
+    expect(startFlow.matchedRules?.length).toBeGreaterThan(0);
+
+    // response-body 里带有 mock 内容
+    const bodyEvt = events.find((e) => e.name === 'flow:response-body')!.payload;
+    expect(bodyEvt.bodyText).toBe('{"a":1}');
+    expect(bodyEvt.bodySize).toBe(7);
+  });
+
   it('statusCode:// 改状态码', async () => {
     const s = await setupWithRules('127.0.0.1/code  statusCode://503');
     const r = await httpViaProxy(s.pp, s.url('/code'));

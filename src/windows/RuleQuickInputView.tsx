@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { RuleQuickInputParams } from '../../shared/types';
+import { BodyEditor } from '../components/BodyEditor';
 
 /**
  * 快速规则参数输入子窗口。
@@ -28,8 +29,19 @@ export function RuleQuickInputView() {
 
   const save = async () => {
     if (!params) return;
-    const v = value.trim();
+    let v = value.trim();
     if (!v) { setError('值不能为空'); return; }
+    // JSON 类 operator：保存前尝试 parse 校验 + minify 成单行。规则语法是"一行一条"，
+    // 若 value 含裸换行 parser 会把续行当独立规则报错（详见 rule-normalize.ts）。
+    const isJson = ['mock', 'resBody', 'reqBody', 'reqHeaders', 'resHeaders'].includes(params.operator);
+    if (isJson) {
+      try {
+        v = JSON.stringify(JSON.parse(v));
+      } catch (e: any) {
+        setError(`JSON 语法错误：${e?.message || '无法解析'}`);
+        return;
+      }
+    }
     // 简单校验
     if (params.operator === 'statusCode' && !/^\d{3}$/.test(v)) { setError('状态码需为 3 位数字'); return; }
     if (params.operator === 'resDelay' && !/^\d+$/.test(v)) { setError('延迟需为整数毫秒'); return; }
@@ -59,6 +71,9 @@ export function RuleQuickInputView() {
 
   const isTextarea = params.inputKind === 'textarea';
   const inputType = params.inputKind === 'number' ? 'number' : 'text';
+  // JSON 类 operator（mock/resBody/reqBody/reqHeaders/resHeaders）用 BodyEditor 提供
+  // 语法高亮+ JSON 校验，比裸 textarea 好用得多
+  const isJsonEditor = isTextarea && ['mock', 'resBody', 'reqBody', 'reqHeaders', 'resHeaders'].includes(params.operator);
 
   return (
     <div className="p-4 space-y-3 text-sm" data-testid="rule-quick-input">
@@ -68,7 +83,23 @@ export function RuleQuickInputView() {
 
       <div className="flex items-start gap-2 text-xs">
         <span className="w-14 text-pb-muted mt-1.5 shrink-0">值</span>
-        {isTextarea ? (
+        {isJsonEditor ? (
+          <div
+            className="flex-1 border border-pb-border rounded overflow-hidden"
+            data-testid="rqi-value"
+            onKeyDownCapture={(e) => {
+              if (e.key === 'Escape') closeSelf();
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && value.trim() && !submitting) save();
+            }}
+          >
+            <BodyEditor
+              value={value}
+              onChange={setValue}
+              language="json"
+              height="160px"
+            />
+          </div>
+        ) : isTextarea ? (
           <textarea
             className="pb-input px-2 py-1 flex-1 text-xs font-mono"
             rows={6}

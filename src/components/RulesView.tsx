@@ -218,8 +218,24 @@ export function RulesView() {
       setDraftName(rs[0].name);
       setDraftText(rs[0].text);
       setDirty(false);
+      return;
     }
-  }, [selectedId]);
+    // 若当前选中的规则集已被外部改动（QuickRuleSubMenu toggle-off、其它窗口编辑等），
+    // 需要把draft 同步到最新——但用户正在编辑（dirty=true）时保持本地内容不覆盖。
+    if (selectedId) {
+      const cur = rs.find((s) => s.id === selectedId);
+      if (!cur) {
+        // 被外部删除：清空选择
+        setSelectedId(null);
+        setDraftName('');
+        setDraftText('');
+        setDirty(false);
+      } else if (!dirty) {
+        setDraftName(cur.name);
+        setDraftText(cur.text);
+      }
+    }
+  }, [selectedId, dirty]);
   useEffect(() => { reload(); }, [reload]);
 
   const selectSet = (s: RuleSetSummary) => {
@@ -375,6 +391,12 @@ export function RulesView() {
             mode === 'scripts' ? 'bg-pb-selected text-white' : 'text-pb-muted hover:bg-pb-hover',
           )}
         >脚本（Scripts）</button>
+        <button
+          data-testid="rules-open-debug"
+          onClick={() => window.proxybaby.ruleDebugOpen()}
+          className="ml-auto px-2 py-0.5 text-xs rounded text-pb-muted hover:bg-pb-hover border border-pb-border"
+          title="打开 Rule Debug 面板：模拟请求，查看每条规则的匹配情况与 dry-run 效果"
+        >Debug…</button>
       </div>
       {mode === 'scripts' ? (
         <div className="flex-1 min-h-0">
@@ -387,8 +409,9 @@ export function RulesView() {
           <span className="text-xs uppercase tracking-wide text-pb-muted">规则集</span>
           <button className="pb-btn" onClick={create} title="新建"><Plus size={14} /></button>
         </div>
-        {/* 常规 / 临时 sub-tab（仅当存在临时规则时展示临时 tab）*/}
-        {temporarySets.length > 0 && (
+        {/* 常规 / 临时 sub-tab：存在临时规则或当前正处于临时 tab 时展示，
+            确保临时规则清空后仍能切回常规 */}
+        {(temporarySets.length > 0 || ruleTab === 'temporary') && (
           <div className="flex items-center gap-1 px-2 py-1 border-b border-pb-border text-xs" data-testid="rules-subtabs">
             <button
               data-testid="rules-subtab-normal"
@@ -470,7 +493,18 @@ export function RulesView() {
           ))}
           {!visibleSets.length && (
             <div className="p-4 text-xs text-pb-muted">
-              {ruleTab === 'temporary' ? '暂无临时规则' : '还没有规则集'}
+              {ruleTab === 'temporary' ? (
+                <>
+                  <div>暂无临时规则</div>
+                  <button
+                    className="mt-2 px-2 py-0.5 rounded border border-pb-border text-pb-text hover:bg-pb-hover"
+                    onClick={() => setRuleTab('normal')}
+                    data-testid="rules-switch-to-normal"
+                  >切换到常规规则</button>
+                </>
+              ) : (
+                '还没有规则集'
+              )}
             </div>
           )}
         </div>

@@ -4,11 +4,15 @@
  * 目前提供内置官方插件；三方插件可后续通过读取磁盘目录扩展。
  */
 import type { Middleware } from './context';
+import { tagMw } from './context';
 import type { OperatorFactory } from './operators';
 import { RuleEngine } from './rule-engine';
 import { getScriptStore, scriptMiddleware, SCRIPT_HINTS } from './scripts';
 import { getGlobalThrottle, getNetworkProfile } from './network-conditions';
 import { getAllowBlockStore } from './allow-block';
+import { getLogger } from '../util/logger';
+
+const logFlow = getLogger('flow');
 
 export interface Plugin {
   id: string;
@@ -18,7 +22,7 @@ export interface Plugin {
   operators?: Record<string, OperatorFactory>;
   middlewaresForFlow?: (input: { url: string; scheme: 'http' | 'https'; hostPath: string; host?: string }) => {
     middlewares: Middleware[];
-    matched: { ruleId: string; ruleName: string; pattern: string }[];
+    matched: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[];
     hints?: { needsReqBodyBuffer: boolean; needsResBodyBuffer: boolean };
   };
   // 也可能提供不基于规则、总是生效的中间件（如 logger）
@@ -52,12 +56,12 @@ export class PluginManager {
       description: '把每个请求的方法/URL/状态打印到主进程 stdout',
       enabled: false,   // 默认关闭，避免刷屏
       alwaysMiddlewares: [
-        async (ctx, next) => {
+        tagMw(async (ctx, next) => {
           const t = Date.now();
           await next();
           const ms = Date.now() - t;
-          console.log(`[flow] ${ctx.request.method} ${ctx.response?.status ?? '-'} ${ctx.request.url} (${ms}ms)`);
-        },
+          logFlow.info(`${ctx.request.method} ${ctx.response?.status ?? '-'} ${ctx.request.url} (${ms}ms)`);
+        }, { name: 'plugin:logger' }),
       ],
     });
 
@@ -87,13 +91,13 @@ export class PluginManager {
       middlewaresForFlow: () => {
         const store = getScriptStore();
         const middlewares: Middleware[] = [];
-        const matched: { ruleId: string; ruleName: string; pattern: string }[] = [];
+        const matched: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[] = [];
         if (!store) return { middlewares, matched };
         for (const s of store.list()) {
           if (!s.enabled) continue;
           // 只对显式启用了 "always" 的脚本做无差别注入。默认脚本仅在规则里 script:// 引用时生效。
           if ((s as any).always) {
-            middlewares.push(scriptMiddleware(s.id));
+            middlewares.push(tagMw(scriptMiddleware(s.id), { name: `script:${s.name}` }));
             matched.push({ ruleId: `script:${s.id}`, ruleName: `脚本 · ${s.name}`, pattern: '*' });
           }
         }
@@ -112,7 +116,7 @@ export class PluginManager {
       description: '按 App / 域名 / URL 允许或阻止请求。命中黑名单直接 abort，或仅放行白名单。',
       enabled: true,
       alwaysMiddlewares: [
-        async (ctx, next) => {
+        tagMw(async (ctx, next) => {
           const store = getAllowBlockStore();
           if (!store) return next();
           const d = store.decide({
@@ -123,7 +127,7 @@ export class PluginManager {
           });
           if (!d.allow) { ctx.abort(d.reason); return; }
           await next();
-        },
+        }, { name: 'plugin:allow-block' }),
       ],
     });
 
@@ -134,7 +138,7 @@ export class PluginManager {
       description: '模拟慢速网络（Offline / 2G / 3G / 4G / 5G / WiFi / 自定义）。',
       enabled: true,
       alwaysMiddlewares: [
-        async (ctx, next) => {
+        tagMw(async (ctx, next) => {
           const key = getGlobalThrottle();
           const profile = getNetworkProfile(key || undefined);
           if (!profile) return next();
@@ -146,7 +150,7 @@ export class PluginManager {
             const extraMs = Math.min(60_000, Math.round((size / profile.downloadBps) * 1000));
             if (extraMs > 5) await new Promise((r) => setTimeout(r, extraMs));
           }
-        },
+        }, { name: 'plugin:network-conditions' }),
       ],
     });
   }
@@ -170,11 +174,11 @@ export class PluginManager {
 
   collectMiddlewares(url: string, scheme: 'http' | 'https', hostPath: string, host?: string): {
     middlewares: Middleware[];
-    matched: { ruleId: string; ruleName: string; pattern: string }[];
+    matched: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[];
     hints: { needsReqBodyBuffer: boolean; needsResBodyBuffer: boolean };
   } {
     const middlewares: Middleware[] = [];
-    const matched: { ruleId: string; ruleName: string; pattern: string }[] = [];
+    const matched: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[] = [];
     let needsReqBodyBuffer = false;
     let needsResBodyBuffer = false;
     for (const p of this.plugins) {

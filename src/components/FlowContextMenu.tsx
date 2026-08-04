@@ -168,6 +168,24 @@ export function FlowContextMenu({
                   <Item onSelect={() => applyBulk((f) => { api.flowRepeat(f.id); })}>再次发送{labelN}</Item>
                   <Item onSelect={() => copy(bulkRawExchange())}>复制为文本</Item>
                   <Item onSelect={() => setRuleOpen(true)} disabled={multi}>应用到规则…</Item>
+                  <Item
+                    disabled={multi}
+                    onSelect={() => {
+                      api.ruleDebugOpen({
+                        url: flow.request.url,
+                        method: flow.request.method,
+                        scheme: flow.request.scheme,
+                        headers: flow.request.headers,
+                        bodyText: flow.request.bodyText,
+                        actualFlow: {
+                          id: flow.id,
+                          edited: !!flow.edited || (flow.matchedRules?.length ?? 0) > 0,
+                          matchedRules: flow.matchedRules || [],
+                          responseStatus: flow.response?.status,
+                        },
+                      });
+                    }}
+                  >用 Rule Debug 打开…</Item>
                   <Item onSelect={() => copy(selectedFlows.map(genMockRule).join('\n'))}>复制为 mock 规则</Item>
                   <Item onSelect={() => copy(selectedFlows.map(genLoggerRule).join('\n'))}>复制为 logger 规则</Item>
                 </ContextMenu.SubContent>

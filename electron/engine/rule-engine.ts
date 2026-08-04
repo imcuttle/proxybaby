@@ -143,19 +143,19 @@ export class RuleEngine {
    */
   buildMiddlewares(url: string, scheme: 'http' | 'https', hostPath: string): {
     middlewares: Middleware[];
-    matched: { ruleId: string; ruleName: string; pattern: string }[];
+    matched: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[];
     hints: { needsReqBodyBuffer: boolean; needsResBodyBuffer: boolean };
   } {
     const middlewares: Middleware[] = [];
-    const matched: { ruleId: string; ruleName: string; pattern: string }[] = [];
+    const matched: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[] = [];
     let needsReqBodyBuffer = false;
     let needsResBodyBuffer = false;
     for (const set of this.sets.values()) {
       if (!set.enabled) continue;
       for (const rule of set.rules) {
         if (!matchRule(rule, url, scheme, hostPath)) continue;
-        matched.push({ ruleId: set.id, ruleName: set.name, pattern: rule.pattern });
-        middlewares.push(...buildOpsMiddlewares(rule.ops));
+        matched.push({ ruleId: set.id, ruleName: set.name, pattern: rule.pattern, lineNo: rule.lineNo });
+        middlewares.push(...buildOpsMiddlewares(rule.ops, { ruleId: set.id, pattern: rule.pattern }));
         const h = opsRequireBuffering(rule.ops);
         if (h.needsReqBodyBuffer) needsReqBodyBuffer = true;
         if (h.needsResBodyBuffer) needsResBodyBuffer = true;

@@ -68,21 +68,33 @@ export function QuickRuleSubMenu({
 }) {
   const itemCls = 'flex items-center px-3 py-1.5 outline-none cursor-default select-none text-pb-text hover:bg-pb-hover data-[highlighted]:bg-pb-hover';
   const trigCls = 'flex items-center px-3 py-1.5 text-pb-text hover:bg-pb-hover data-[state=open]:bg-pb-hover cursor-default outline-none';
-  const [existingByPreset, setExistingByPreset] = useState<Record<string, string>>({});
+  const [existingByPreset, setExistingByPreset] = useState<Record<string, { ruleSetId: string; lineNo: number }>>({});
   const activeCount = Object.keys(existingByPreset).length;
   const presetShortOp = (p: QuickRulePreset): string => (p.operator === 'raw' ? 'cors' : p.operator);
+
+  /**
+   * 按 pattern + operator 精准定位到临时规则集中的某一行。
+   *
+   * 定位规则：
+   *   1. rs.temporary=true 才考虑
+   *   2. 规则集名字要能解出 shortOp（`[临时] <shortOp> ...` 前缀），且与 preset 匹配
+   *   3. 规则集内至少有一条 `rule.pattern === pattern` 的规则行；取第一条命中的 `lineNo`
+   *      —— 这样即使规则集里有用户手工加的其它规则行，toggle 只影响我们创建的这一行。
+   */
   const refresh = async () => {
     try {
       const list = await window.proxybaby.rulesList();
-      const map: Record<string, string> = {};
+      const map: Record<string, { ruleSetId: string; lineNo: number }> = {};
       for (const rs of list as any[]) {
         if (!rs.temporary) continue;
-        if (!rs.rules?.some((r: any) => r.pattern === pattern)) continue;
         const m = String(rs.name || '').match(/^\[临时\]\s+(\S+)\s+/);
         if (!m) continue;
         const shortOp = m[1];
         const hit = presets.find((p) => presetShortOp(p) === shortOp);
-        if (hit) map[hit.key] = rs.id;
+        if (!hit) continue;
+        const rule = rs.rules?.find((r: any) => r.pattern === pattern);
+        if (!rule || typeof rule.lineNo !== 'number') continue;
+        map[hit.key] = { ruleSetId: rs.id, lineNo: rule.lineNo };
       }
       setExistingByPreset(map);
     } catch {}
@@ -93,13 +105,60 @@ export function QuickRuleSubMenu({
     return () => off();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pattern]);
-  const removeById = async (id: string) => {
-    try { await window.proxybaby.rulesRemove(id); } catch {}
+
+  /**
+   * 删除临时规则集中的某一行：
+   *   - 若删完后规则集只剩空白/注释 → 整个规则集 remove
+   *   - 否则 update text 保留其它行
+   *
+   * 保守处理跨行值：如果紧跟在被删行之后有若干"无效续行"（既不是空/注释/组标签，
+   * 也不是合法规则起始 —— 即 parser 视之为错误），一起吃掉。这样即使用户之前用
+   * Enter 把 mock JSON 分成了多行（parser 层其实不认，但会残留在 text 里），toggle
+   * 删除时不会留下孤儿续行。
+   */
+  const removeRuleLine = async (ruleSetId: string, lineNo: number) => {
+    try {
+      const rs = await window.proxybaby.rulesGet(ruleSetId);
+      if (!rs) return;
+      const lines = String(rs.text || '').split(/\r?\n/);
+      const idx = lineNo - 1;
+      if (idx < 0 || idx >= lines.length) return;
+
+      // 找出紧邻其后的"无效续行"范围：既非空白/注释/组标签，也不是新规则起始
+      // （新规则起始的判断：trim 后能被 parser 认作至少一个 token + 已知 operator；
+      // 这里做近似判断：行内含 `<op>://` 或 `\b<op>\b` 之一即视为可能是新规则起始）
+      const knownOps = ['statusCode','redirect','abort','reqHeaders','resHeaders','reqBody','resBody',
+        'host','file','mock','tpl','reqDelay','resDelay','log','ua','referer','req','res',
+        'breakpoint','script','throttle','block','allow'];
+      const opAlt = new RegExp(`(?:^|\\s)(?:${knownOps.join('|')})(?::\\/\\/|\\b)`);
+      let removeEnd = idx;
+      for (let j = idx + 1; j < lines.length; j++) {
+        const t = lines[j].trim();
+        if (t === '') break;                  // 空行 → 停
+        if (t.startsWith('#')) break;         // 注释 → 停
+        if (t.startsWith('[') && t.endsWith(']')) break; // 组标签 → 停
+        if (opAlt.test(lines[j])) break;      // 看起来像新规则起始 → 停
+        removeEnd = j;                        // 无效续行，一起删
+      }
+
+      lines.splice(idx, removeEnd - idx + 1);
+      const nextText = lines.join('\n');
+      //剩下的都是空白/注释/组标签？→ 整个 remove
+      const hasRule = lines.some((l) => {
+        const t = l.trim();
+        return t !== '' && !t.startsWith('#') && !(t.startsWith('[') && t.endsWith(']'));
+      });
+      if (!hasRule) {
+        await window.proxybaby.rulesRemove(ruleSetId);
+      } else {
+        await window.proxybaby.rulesUpdate(ruleSetId, { text: nextText });
+      }
+    } catch {}
   };
   const onItemClick = (preset: QuickRulePreset) => {
-    const existingId = existingByPreset[preset.key];
-    if (existingId) {
-      removeById(existingId);
+    const existing = existingByPreset[preset.key];
+    if (existing) {
+      removeRuleLine(existing.ruleSetId, existing.lineNo);
       return;
     }
     onApply(pattern, preset);

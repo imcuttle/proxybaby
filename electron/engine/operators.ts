@@ -4,11 +4,15 @@
  */
 import fs from 'node:fs/promises';
 import type { Middleware, MutableResponse, ProxyContext } from './context';
+import { tagMw } from './context';
 import type { RuleOperator } from './rule-parser';
 import type { BreakpointController } from './breakpoint';
 import { scriptMiddleware } from './scripts';
 import { getNetworkProfile } from './network-conditions';
 import type { RequestData, ResponseData } from '../../shared/types';
+import { getLogger } from '../util/logger';
+
+const logRuleLog = getLogger('rule:log');
 
 export type OperatorFactory = (value: string | undefined, ctx: OperatorContext) => Middleware;
 
@@ -211,9 +215,9 @@ export const OPERATORS: Record<string, OperatorFactory> = {
   },
 
   log: () => async (ctx, next) => {
-    console.log('[rule:log]', ctx.request.method, ctx.request.url);
+    logRuleLog.info(`${ctx.request.method} ${ctx.request.url}`);
     await next();
-    if (ctx.response) console.log('[rule:log] ->', ctx.response.status, ctx.request.url);
+    if (ctx.response) logRuleLog.info(`→ ${ctx.response.status} ${ctx.request.url}`);
   },
 
   ua: (value) =>
@@ -289,11 +293,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export function buildOpsMiddlewares(ops: RuleOperator[]): Middleware[] {
+export function buildOpsMiddlewares(
+  ops: RuleOperator[],
+  meta?: { ruleId?: string; pattern?: string },
+): Middleware[] {
   const mws: Middleware[] = [];
   for (const o of ops) {
     const factory = OPERATORS[o.op];
-    if (factory) mws.push(factory(o.value, {}));
+    if (factory) {
+      const mw = factory(o.value, {});
+      mws.push(tagMw(mw, { name: `op:${o.op}`, ruleId: meta?.ruleId, pattern: meta?.pattern }));
+    }
   }
   return mws;
 }

@@ -1,5 +1,29 @@
 # proxybaby
 
+## 0.8.0
+
+### ✨ 新功能
+
+- feat(app): 应用内自动更新 + 统一 logger + 原生菜单栏 —— 启动后轮询 GitHub Releases，有新版弹独立窗口展示 changelog；electron-log 统一日志出口；中文原生菜单栏（`9bc9e13`）
+- feat(rules): Rule Debug 独立窗口 —— 模拟请求 dry-run 看每条规则命中/未命中原因 + 环境诊断 + operator 改写快照；JSON 规则文本 normalize（Monaco pretty JSON 自动压平成单行）；中间件链 trace 日志（`d8d3088`）
+- feat(ui): Monaco headers/body 编辑器 —— HTTP header 名/值 IntelliSense，Composer / 断点 / Rule Debug / Scripts 共用；App Info 悬浮 tooltip 展示 pid/bundleId/execPath（`cebb0ff`）
+
+### 🐛 修复
+
+- fix(system,proxy): HTTPS(MITM) 请求的 App 来源终于能识别了 —— 通过 CONNECT 阶段建立 externalPort 映射解决内部环回 socket 问题；CLI 进程（node/python）沿 PPID 链找终端 App 图标；Chrome Helper / Code Helper 等归并到主 App；紧急退出时系统代理更稳的还原逻辑；短路规则命中后 UI「已编辑」标记不显示的问题（`b0cca0a`）
+
+### 🧪 测试
+
+- test(e2e): 抽出 `_shared` 启动器 + 拆分规则 spec + 覆盖 updater / rule-debug / 菜单栏（`e0d2f09`）
+
+### 🔧 其他
+
+- chore(integration): 把 updater / rule-debug / menu / UI 编辑器接入主流程 —— 类型 / IPC 桥 / 路由 / 主进程 whenReady 连线（`aed5e1e`）
+
+### 📝 文档
+
+- docs(screenshots): 重新截图 —— 新菜单栏 / Rule Debug / App Info tooltip / Monaco 编辑器（`a87466e`）
+
 ## 0.7.0
 
 ### ✨ 新功能

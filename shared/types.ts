@@ -79,7 +79,7 @@ export interface Flow {
   errorMessage?: string;
   isTLS: boolean;
   durationMs?: number;
-  matchedRules?: { ruleId: string; ruleName: string; pattern: string }[];
+  matchedRules?: { ruleId: string; ruleName: string; pattern: string; lineNo?: number }[];
   edited?: boolean;                 // 是否被规则/断点改写
   note?: string;                    // 用户备注
   highlight?: string;               // 用户标记的高亮色（'red'|'orange'|'yellow'|'green'|'blue'）
@@ -103,6 +103,26 @@ export interface IpcEvents {
   'proxy:traffic': { totalBytes: number; rxRate: number; txRate: number };
   'proxy:override': SystemProxyOverride | null;
   'cert:status': CertStatus;
+  'updater:info': UpdateInfo;
+}
+
+// ============ Updater ============
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  isSkipped: boolean;
+  releaseName: string;
+  releaseNotes: string;   // markdown
+  htmlUrl: string;        // Release 页 URL
+  publishedAt: string;
+  checkedAt: number;
+}
+
+export interface UpdateCheckResult {
+  ok: boolean;
+  info: UpdateInfo | null;
+  error?: string;
 }
 
 export interface ProxyStatus {
@@ -207,6 +227,100 @@ export interface PluginSummary {
   name: string;
   description?: string;
   enabled: boolean;
+}
+
+// ============ Rule Debug ============
+/** Rule Debug 面板的输入：模拟一个请求，看规则怎么匹配它、会被怎么改写。 */
+export interface RuleDebugInput {
+  url: string;
+  method: string;
+  scheme?: 'http' | 'https';           // 从 url 推断，可覆盖
+  headers?: Header[];
+  bodyText?: string;
+  /** 若从已抓到的 flow 打开，这里带上该 flow 实际的抓包信息，用于「模拟 vs 实际」对比。 */
+  actualFlow?: {
+    id: string;
+    edited: boolean;
+    matchedRules: {ruleId: string; ruleName: string; pattern: string; lineNo?: number }[];
+    responseStatus?: number;
+  };
+}
+
+/** 单条规则的匹配诊断（含未命中的原因）。 */
+export interface RuleMatchDiagnosis {
+  ruleSetId: string;
+  ruleSetName: string;
+  ruleSetEnabled: boolean;
+  lineNo: number;
+  raw: string;
+  pattern: string;
+  matcherKind: 'regex' | 'prefix' | 'glob';
+  matched: boolean;
+  /** 一句话说清楚为什么命中/未命中 */
+  reason: string;
+  ops: { op: string; value?: string }[];
+}
+
+/** dry-run 里跑过的每个 operator 的记录。skipped 有值表示因外部依赖被stub。 */
+export interface RuleDebugOpTrace {
+  op: string;
+  value?: string;
+  ruleSetName: string;
+  skipped?: string;
+}
+
+export interface RuleDebugResult {
+  input: {
+    url: string;
+    method: string;
+    scheme: 'http' | 'https';
+    headers: Header[];
+    bodyText: string;
+  };
+  /** 实际抓包时的"环境"诊断：即便规则匹配，这些外部因素也可能阻止规则生效 */
+  environment: {
+    /** SSL 白名单是否会MITM 解密这个 host。false 时 CONNECT 会直通，规则完全不生效 */
+    willDecrypt: boolean;
+    willDecryptReason: string;
+    /** Allow/Block 名单是否会 abort */
+    allowBlockAllows: boolean;
+    allowBlockReason?: string;
+    /** Record filter 是否会把它挡在 flow 列表外（不影响规则生效，只影响是否可见） */
+    willRecord: boolean;
+    willRecordReason: string;
+  };
+  diagnoses: RuleMatchDiagnosis[];
+  dryRun: {
+    /** 若规则短路了（mock/redirect/abort/file/...），这里记录 */
+    shortCircuit?: {
+      kind: 'respond' | 'abort';
+      reason?: string;
+      response?: {
+        status: number;
+        statusText: string;
+        headers: Header[];
+        bodyText?: string;
+        bodySize: number;
+        contentType?: string;
+      };
+    };
+    /** pre 阶段跑完后的请求快照（可能被 reqHeaders/reqBody/host/ua/... 改写） */
+    finalRequest: {
+      method: string;
+      url: string;
+      headers: Header[];
+      bodyText?: string;
+    };
+    /** short-circuit 提供的响应快照（若有） */
+    finalResponse?: {
+      status: number;
+      statusText: string;
+      headers: Header[];
+      bodyText?: string;
+    };
+    executedOps: RuleDebugOpTrace[];
+    error?: string;
+  };
 }
 
 // ============ Scripts ============
@@ -320,6 +434,7 @@ export interface ProxyBabyBridge {
   getFlows(): Promise<Flow[]>;
   // rules
   rulesList(): Promise<RuleSetSummary[]>;
+  rulesGet(id: string): Promise<RuleSetSummary | null>;
   rulesAdd(name: string, text: string, enabled: boolean): Promise<RuleSetSummary>;
   rulesUpdate(id: string, patch: { name?: string; text?: string; enabled?: boolean }): Promise<RuleSetSummary | null>;
   rulesRemove(id: string): Promise<boolean>;
@@ -329,6 +444,10 @@ export interface ProxyBabyBridge {
   rulesClearTemp(): Promise<number>;
   ruleQuickInputOpen(params: RuleQuickInputParams): Promise<boolean>;
   ruleQuickInputConsumeInit(): Promise<RuleQuickInputParams | null>;
+  // ---- Rule Debug ----
+  ruleDebugRun(input: RuleDebugInput): Promise<RuleDebugResult>;
+  ruleDebugOpen(prefill?: RuleDebugInput): Promise<boolean>;
+  ruleDebugConsumeInit(): Promise<RuleDebugInput | null>;
   dialogPickFile(): Promise<string | null>;
   // plugins
   pluginsList(): Promise<PluginSummary[]>;
@@ -355,8 +474,8 @@ export interface ProxyBabyBridge {
   upstreamProxySet(cfg: UpstreamProxyConfig): Promise<UpstreamProxyConfig>;
   // Composer
   composerSend(req: { method: string; url: string; headers: Header[]; bodyText?: string }): Promise<{ ok: boolean; id?: string; error?: string }>;
-  // 独立子窗口（Settings / Diff / FilterConfig / FilterEntryEditor / AI Sessions）
-  openWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'ai-session', opts?: { width?: number; height?: number; title?: string }): Promise<boolean>;
+  // 独立子窗口（Settings / Diff / FilterConfig / FilterEntryEditor / AI Sessions / RuleDebug）
+  openWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'ai-session' | 'rule-debug' | 'updater', opts?: { width?: number; height?: number; title?: string }): Promise<boolean>;
   closeSelfWindow(): Promise<void>;
   broadcast(channel: string, payload: unknown): Promise<void>;
   // 过滤规则编辑器子窗口：父窗口 open 时把 params 放在 latch；子窗口 mount 后 consume 拉取。
@@ -389,6 +508,12 @@ export interface ProxyBabyBridge {
   aiSetConfig(patch: Partial<AiConfig>): Promise<AiConfig>;
   aiListSkills(): Promise<{ name: string; description?: string; source: string }[]>;
   aiPickFile(): Promise<string | null>;
+  // ---- Updater ----
+  updaterCheck(silent?: boolean): Promise<UpdateCheckResult>;
+  updaterGetLast(): Promise<UpdateInfo | null>;
+  updaterSkip(version: string): Promise<boolean>;
+  updaterRemindLater(): Promise<boolean>;
+  updaterOpenRelease(url: string): Promise<boolean>;
 }
 
 // ============ AI ============

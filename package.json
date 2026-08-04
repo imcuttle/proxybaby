@@ -45,6 +45,7 @@
     "@tanstack/react-table": "^8.20.0",
     "@tanstack/react-virtual": "^3.10.0",
     "clsx": "^2.1.1",
+    "electron-log": "^5.4.4",
     "is-hotkey": "^0.2.0",
     "lucide-react": "^0.454.0",
     "monaco-editor": "^0.56.0",

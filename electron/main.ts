@@ -17,6 +17,8 @@ import { applySystemProxy, revertSystemProxy, revertSystemProxySync, cleanupStal
 import { ProxyServer } from './proxy/proxy-server';
 import { FlowStore } from './store/flow-store';
 import { RuleEngine } from './engine/rule-engine';
+import { normalizeInlineValue, normalizeRuleText } from './engine/rule-normalize';
+import { debugRules, defaultProbes } from './engine/rule-debug';
 import { PluginManager } from './engine/plugins';
 import { BreakpointController } from './engine/breakpoint';
 import { ScriptStore, setScriptStore } from './engine/scripts';
@@ -30,13 +32,20 @@ import { installCliLink, installCliLinkWithSudo } from './system/cli-install';
 import { exportProxybaby, importProxybaby, exportHAR } from './store/session-io';
 import { repeatFlow } from './proxy/flow-repeat';
 import { AiManager } from './ai/manager';
+import * as updater from './updater/updater';
+import { initLogger, getLogger, getLogDir, getCurrentLogFile, clearAllLogs } from './util/logger';
+import { buildAppMenu } from './menu';
 import type {
   ProxyStatus, CertStatus, BreakpointResume, FlowRepeatPatch,
   AllowBlockConfig, SslDecryptConfig, UpstreamProxyConfig, ScriptSummary,
   SystemProxyOverride, FilterEntryEditorParams,
+  RuleDebugInput,
 } from '../shared/types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+initLogger();
+const log = getLogger('main');
 
 const PROXY_HOST = '127.0.0.1';
 let PROXY_PORT = 9998;
@@ -72,7 +81,7 @@ let emergencyCleanupDone = false;
 function emergencyCleanupProxySync() {
   if (emergencyCleanupDone) return;
   emergencyCleanupDone = true;
-  try { revertSystemProxySync(); } catch {}
+  try { revertSystemProxySync(PROXY_HOST, PROXY_PORT); } catch {}
 }
 // 收到常见致命信号：SIGINT (Ctrl+C)、SIGTERM (kill / launchd 关机)、SIGHUP (终端断开)
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -84,11 +93,11 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
 }
 // 主进程未捕获异常 / rejection：至少把代理清了再挂
 process.on('uncaughtException', (err) => {
-  try { console.error('[proxybaby] uncaughtException', err); } catch {}
+  try { log.error('uncaughtException', err); } catch {}
   emergencyCleanupProxySync();
 });
 process.on('unhandledRejection', (err) => {
-  try { console.error('[proxybaby] unhandledRejection', err); } catch {}
+  try { log.error('unhandledRejection', err); } catch {}
   // 不清代理 —— 未处理的 promise 拒绝不一定是致命的
 });
 // 进程即将退出：最后一次机会（此时 event loop 已空）
@@ -142,10 +151,10 @@ async function bootstrapProxy() {
     try {
       const cleaned = await cleanupStaleProxyPointingAt(PROXY_HOST, PROXY_PORT);
       if (cleaned.length) {
-        console.log(`[proxybaby] cleaned stale proxy on: ${cleaned.join(', ')}`);
+        log.info(`cleaned stale proxy on: ${cleaned.join(', ')}`);
       }
     } catch (err) {
-      console.warn('[proxybaby] cleanupStaleProxy failed', err);
+      log.warn('cleanupStaleProxy failed', err);
     }
     const applied = await applySystemProxy(PROXY_HOST, PROXY_PORT);
     proxyStatus.systemProxyApplied = applied.length > 0;
@@ -306,6 +315,64 @@ function createTray() {
   refreshTrayMenu();
 }
 
+/**
+ * 注册应用菜单（顶部菜单栏）。菜单项动作复用 setupIpc 里已有的 handler：
+ * 主要通过 send 一个 menu:* 事件让渲染层触发，或直接调用主进程逻辑。
+ */
+function registerAppMenu() {
+  const menu = buildAppMenu({
+    getMainWindow: () => mainWindow,
+    openChildWindow: (route) => openChildWindow(route),
+    toggleRecording: () => {
+      const next = !proxyStatus.recording;
+      proxyStatus.recording = next;
+      proxyServer?.setRecording(next);
+      broadcast('proxy:status', proxyStatus);
+      refreshTrayMenu();
+      return next;
+    },
+    clearFlows: () => {
+      store.clear();
+      broadcast('flow:cleared', {});
+    },
+    restartProxy: async () => {
+      log.info('menu: restart proxy');
+      try {
+        await proxyServer?.stop();
+      } catch {}
+      await bootstrapProxy();
+      refreshTrayMenu();
+    },
+    triggerExport: (format) => {
+      // 让渲染层弹出保存对话框走已有的 session:export 路径（保持菜单/UI 一致）
+      const w = mainWindow;
+      if (w && !w.isDestroyed()) w.webContents.send('menu:export-session', format);
+    },
+    triggerImport: () => {
+      const w = mainWindow;
+      if (w && !w.isDestroyed()) w.webContents.send('menu:import-session');
+    },
+    copyDiagnostic: async () => {
+      const { clipboard } = await import('electron');
+      const info = [
+        `ProxyBaby ${app.getVersion()}`,
+        `Platform: ${process.platform} ${os.arch()} ${os.release()}`,
+        `Node: ${process.versions.node}`,
+        `Electron: ${process.versions.electron}`,
+        `Proxy: ${PROXY_HOST}:${PROXY_PORT} recording=${proxyStatus.recording}`,
+        `Cert trusted: ${certStatus.trusted}`,
+        `System proxy applied: ${proxyStatus.systemProxyApplied}`,
+        `Log dir: ${getLogDir() ?? '(uninitialized)'}`,
+        `Current log file: ${getCurrentLogFile() ?? '(uninitialized)'}`,
+      ].join('\n');
+      clipboard.writeText(info);
+      log.info('menu: diagnostic copied');
+    },
+    checkUpdate: () => runUpdaterCheck({ silent: false }),
+  });
+  Menu.setApplicationMenu(menu);
+}
+
 function refreshTrayMenu() {
   if (!tray) return;
   const menu = Menu.buildFromTemplate([
@@ -338,11 +405,52 @@ function refreshTrayMenu() {
         refreshTrayMenu();
       },
     },
+    {
+      label: '检查更新…',
+      click: () => { runUpdaterCheck({ silent: false }); },
+    },
     { type: 'separator' },
     { label: '退出', role: 'quit' },
   ]);
   tray.setToolTip('ProxyBaby');
   tray.setContextMenu(menu);
+}
+
+/**
+ * 触发一次更新检查。
+ *silent=true（启动时自动跑）：无更新/网络错误静默；发现新版本且未被 skip 才弹独立窗口。
+ *   silent=false（用户手动点）：无更新弹 dialog 提示；网络错误也弹 dialog；有新版本正常弹窗口。
+ */
+async function runUpdaterCheck(opts: { silent: boolean }): Promise<void> {
+  const result = await updater.checkForUpdates({ silent: opts.silent, force: !opts.silent });
+  if (!result.ok) {
+    if (!opts.silent) {
+      dialog.showMessageBox({
+        type: 'warning',
+        message: '检查更新失败',
+        detail: result.error || '未知网络错误',
+        buttons: ['好的'],
+      }).catch(() => {});
+    }
+    return;
+  }
+  const info = result.info;
+  if (!info) return;
+  if (!info.hasUpdate) {
+    if (!opts.silent) {
+      dialog.showMessageBox({
+        type: 'info',
+        message: '已是最新版本',
+        detail: `当前版本 ${info.currentVersion} 已经是最新。`,
+        buttons: ['好的'],
+      }).catch(() => {});
+    }
+    return;
+  }
+  // 有新版本
+  if (opts.silent && info.isSkipped) return;
+  broadcast('updater:info', info);
+  openChildWindow('updater', { title: `ProxyBaby ${info.latestVersion} 可用` });
 }
 
 function showMainWindow() {
@@ -381,7 +489,7 @@ function showMainWindow() {
 
 /** 通用子窗口打开：hash 路由到 App 里的独立视图（settings/diff） */
 const childWindows = new Map<string, BrowserWindow>();
-function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input' | 'ai-session', opts: { width?: number; height?: number; title?: string } = {}) {
+function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input' | 'ai-session' | 'rule-debug' | 'updater', opts: { width?: number; height?: number; title?: string } = {}) {
   const existing = childWindows.get(route);
   if (existing && !existing.isDestroyed()) {
     existing.show();
@@ -389,11 +497,12 @@ function openChildWindow(route: 'settings' | 'diff' | 'filter-config' | 'filter-
     return;
   }
   const isSmallDialog = route === 'filter-entry-editor' || route === 'rule-quick-input';
+  const isUpdater = route === 'updater';
   const win = new BrowserWindow({
-    width: opts.width ?? 900,
-    height: opts.height ?? 700,
-    minWidth: isSmallDialog ? 360 : 500,
-    minHeight: isSmallDialog ? 260 : 400,
+    width: opts.width ?? (isUpdater ? 640 : 900),
+    height: opts.height ?? (isUpdater ? 720 : 700),
+    minWidth: isSmallDialog ? 360 : (isUpdater ? 480 : 500),
+    minHeight: isSmallDialog ? 260 : (isUpdater ? 420 : 400),
     // 全黑主题：隐藏 macOS 原生标题栏，只留红绿灯；标题由自定义头部承担
     backgroundColor: '#0e0f13',
     titleBarStyle: 'hiddenInset',
@@ -459,6 +568,25 @@ function setupIpc() {
 
   ipcMain.handle('proxy:get-status', () => proxyStatus);
   ipcMain.handle('cert:get-status', async () => (certStatus = await getCertStatus()));
+
+  // ---------- Logs ----------
+  ipcMain.handle('app:open-logs-folder', async () => {
+    const dir = getLogDir();
+    if (!dir) return { ok: false, reason: 'log dir unavailable' };
+    await shell.openPath(dir);
+    return { ok: true, dir };
+  });
+  ipcMain.handle('app:reveal-log-file', () => {
+    const f = getCurrentLogFile();
+    if (!f) return { ok: false };
+    shell.showItemInFolder(f);
+    return { ok: true, file: f };
+  });
+  ipcMain.handle('app:clear-logs', async () => {
+    const r = await clearAllLogs();
+    return { ok: true, ...r };
+  });
+
   ipcMain.handle('proxy:toggle-recording', (_e, recording: boolean) => {
     proxyStatus.recording = recording;
     proxyServer?.setRecording(recording);
@@ -630,32 +758,53 @@ function setupIpc() {
   });
   ipcMain.handle('rules:list', () => (ruleEngine?.list() ?? []).map(ruleSetSummary));
   ipcMain.handle('rules:get', (_e, id: string) => ruleSetSummary(ruleEngine?.get(id)));
-  ipcMain.handle('rules:add', (_e, name: string, text: string, enabled: boolean) =>
-    ruleSetSummary(ruleEngine?.add(name, text, enabled)),
-  );
-  ipcMain.handle('rules:update', (_e, id: string, patch: any) => ruleSetSummary(ruleEngine?.update(id, patch)));
-  ipcMain.handle('rules:remove', (_e, id: string) => ruleEngine?.remove(id));
-  ipcMain.handle('rules:set-enabled', (_e, id: string, enabled: boolean) =>
-    ruleEngine?.setEnabled(id, enabled),
-  );
+  // 写操作统一广播 rules:changed，让所有依赖 rulesList 的渲染层组件（RulesView、
+  // QuickRuleSubMenu 的 ✓ 状态等）保持同步——避免右键 toggle-off 后规则页看到陈旧快照。
+  ipcMain.handle('rules:add', (_e, name: string, text: string, enabled: boolean) => {
+    const rs = ruleEngine?.add(name, normalizeRuleText(text ?? ''), enabled);
+    if (rs) broadcast('rules:changed', undefined);
+    return ruleSetSummary(rs);
+  });
+  ipcMain.handle('rules:update', (_e, id: string, patch: any) => {
+    // 用户可能在 RulesView 里手动 Enter 拆行了 mock JSON；保存前把跨行 value 合成单行，
+    // 避免 parser 把续行当独立规则报错。
+    const p = patch && typeof patch === 'object' ? { ...patch } : patch;
+    if (p && typeof p.text === 'string') p.text = normalizeRuleText(p.text);
+    const rs = ruleEngine?.update(id, p);
+    if (rs) broadcast('rules:changed', undefined);
+    return ruleSetSummary(rs);
+  });
+  ipcMain.handle('rules:remove', (_e, id: string) => {
+    const ok = ruleEngine?.remove(id);
+    if (ok) broadcast('rules:changed', undefined);
+    return ok;
+  });
+  ipcMain.handle('rules:set-enabled', (_e, id: string, enabled: boolean) => {
+    const ok = ruleEngine?.setEnabled(id, enabled);
+    if (ok) broadcast('rules:changed', undefined);
+    return ok;
+  });
 
   // 快速规则（Sidebar 右键） —— 生成一个临时规则集
   ipcMain.handle('rules:quick-add', (_e, args: { pattern: string; operator: string; value?: string }) => {
     if (!ruleEngine) return null;
     const { pattern, operator, value } = args || ({} as any);
     if (!pattern || !operator) return null;
+    // 规则语法是"一行一条"，value 里绝不能含裸换行；JSON 类operator 尝试 minify，
+    // 失败则退化为清除换行。参见 rule-parser 的 lines.split(/\r?\n/) 每行独立解析。
+    const normalizedValue = normalizeInlineValue(operator, value);
     // 拼 whistle 规则行：无值的 operator（abort）单写；有值的走 protocol://value 形式；
-    // 特殊：'raw' 表示 value 本身就是完整 operator 段（如一键 CORS 时预拼好 JSON），直接用；
+    // 特殊：'raw' 表示 value 本身就是完整 operator 段（如一键CORS 时预拼好 JSON），直接用；
     //       'mapRemote' 直接用 targetURL 作为操作段（whistle 语法：pattern  http://...）
     const opSeg = operator === 'abort'
       ? 'abort'
       : operator === 'raw'
-        ? String(value || '')
+        ? String(normalizedValue || '')
         : operator === 'mapRemote'
-          ? String(value || '')
+          ? String(normalizedValue || '')
           : operator === 'mapLocal'
-            ? `file://${value || ''}`
-            : `${operator}://${value ?? ''}`;
+            ? `file://${normalizedValue || ''}`
+            : `${operator}://${normalizedValue ?? ''}`;
     const line = `${pattern}  ${opSeg}`;
     const shortOp = operator === 'raw' ? 'cors' : operator;
     const name = `[临时] ${shortOp} ${pattern}`.slice(0, 80);
@@ -722,7 +871,7 @@ function setupIpc() {
   });
 
   // 子窗口
-  ipcMain.handle('window:open', (_e, route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'ai-session', opts?: any) => {
+  ipcMain.handle('window:open', (_e, route: 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'ai-session' | 'rule-debug', opts?: any) => {
     openChildWindow(route, opts || {});
     return true;
   });
@@ -754,6 +903,28 @@ function setupIpc() {
     const p = pendingEntryEditorParams;
     pendingEntryEditorParams = null;
     return p;
+  });
+
+  // ---- Rule Debug ----
+  // Debug 面板：模拟一个请求跑规则匹配 + dry-run 中间件链。
+  let pendingRuleDebugParams: RuleDebugInput | null = null;
+  ipcMain.handle('ruleDebug:open', (_e, prefill?: RuleDebugInput) => {
+    pendingRuleDebugParams = prefill || null;
+    openChildWindow('rule-debug', {
+      title: 'ProxyBaby · Rule Debug',
+      width: 960,
+      height: 720,
+    });
+    return true;
+  });
+  ipcMain.handle('ruleDebug:consumeInit', () => {
+    const p = pendingRuleDebugParams;
+    pendingRuleDebugParams = null;
+    return p;
+  });
+  ipcMain.handle('ruleDebug:run', async (_e, input: RuleDebugInput) => {
+    if (!ruleEngine) throw new Error('rule engine not ready');
+    return debugRules(ruleEngine, input, defaultProbes());
   });
 
   // ---- Scripts ----
@@ -852,6 +1023,7 @@ function setupIpc() {
         case 'flow:end': store.finalize(payload.id, payload.durationMs, payload.status, payload.error); break;
         case 'flow:app-info': store.updateAppInfo(payload.id, payload.app); break;
         case 'flow:breakpoint': break;
+        case 'updater:info': break;
       }
       broadcast(event, payload);
     });
@@ -958,6 +1130,23 @@ function setupIpc() {
     return filePaths[0];
   });
 
+  // ---------- Updater ----------
+  ipcMain.handle('updater:check', async (_e, silent?: boolean) => {
+    return updater.checkForUpdates({ silent: !!silent, force: !silent });
+  });
+  ipcMain.handle('updater:get-last', async () => {
+    return updater.getLastResult();
+  });
+  ipcMain.handle('updater:skip', async (_e, version: string) => {
+    return updater.skipVersion(String(version || ''));
+  });
+  ipcMain.handle('updater:remind-later', async () => {
+    return updater.remindLater();
+  });
+  ipcMain.handle('updater:open-release', async (_e, url: string) => {
+    return updater.openReleasePage(String(url || ''));
+  });
+
   // E2E：直接把 acp 事件灌入当前 active client
   if (E2E) {
     ipcMain.handle('__e2e:ai-emit', (_e, obj: any) => {
@@ -980,21 +1169,31 @@ app.whenReady().then(async () => {
   try {
     const r = await installCliLink();
     if (r.ok && (r.created || r.updated)) {
-      console.log(`[proxybaby] CLI ${r.created ? 'installed' : 'updated'} at ${r.path}`);
+      log.info(`CLI ${r.created ? 'installed' : 'updated'} at ${r.path}`);
     } else if (!r.ok && !/开发模式|仅支持 macOS/.test(r.reason)) {
-      console.log('[proxybaby] CLI install skipped:', r.reason);
+      log.info('CLI install skipped:', r.reason);
     }
   } catch (err) {
-    console.warn('[proxybaby] CLI install error', err);
+    log.warn('CLI install error', err);
   }
   setupIpc();
+  registerAppMenu();
   createTray();
   showMainWindow();
   try {
     await bootstrapProxy();
     refreshTrayMenu();
   } catch (err) {
-    console.error('bootstrapProxy error', err);
+    log.error('bootstrapProxy error', err);
+  }
+
+  // 启动 5s 后后台检查更新（e2e 模式跳过，避免请求真实 GitHub）
+  if (!E2E) {
+    setTimeout(() => {
+      runUpdaterCheck({ silent: true }).catch((err) => {
+        log.warn('updater check error', err);
+      });
+    }, 5000);
   }
 });
 
@@ -1006,24 +1205,27 @@ let quitting = false;
 app.on('before-quit', async (e) => {
   if (quitting) return;         // 允许再次点击时立即硬退出
   quitting = true;
+
+  // 关键：先同步清理系统代理，保证任何情况下都能清干净。
+  // execFileSync 会短暂阻塞（每命令 1s timeout × 服务数 × 2），
+  // 退出场景下这个阻塞可接受，换来 100% 清理成功率。
+  emergencyCleanupProxySync();
+
   e.preventDefault();
   // 硬性超时：无论清理是否完成，2s 后强制退出。
   // 之前若某个 TCP 连接仍在，proxyServer.stop() 里的 server.close() 会永远挂起，
   // 导致 Dock 右键→退出 无反应。
   const timer = setTimeout(() => {
-    try { console.warn('[proxybaby] shutdown timed out, forcing exit'); } catch {}
-    // 超时说明异步 revert 没跑完 —— 用同步兜底再清一次
-    emergencyCleanupProxySync();
+    try { log.warn('shutdown timed out, forcing exit'); } catch {}
     app.exit(0);
   }, 2000);
   try {
     try { stopControlServer(); } catch {}
-    try { await revertSystemProxy(); } catch {}
+    // revertSystemProxy() 已经在 emergencyCleanupProxySync() 里做过同步版本（含 host:port 扫描兜底），
+    // appliedServices 已被同步版清空，异步版是 no-op，故省略。
     try { await proxyServer?.stop(); } catch {}
   } finally {
     clearTimeout(timer);
-    // 走到这里说明异步 revert 已成功，emergency 就不必再跑一次
-    emergencyCleanupDone = true;
     app.exit(0);
   }
 });

@@ -18,7 +18,8 @@ export type SearchMode = 'contains' | 'equals' | 'regex';
 
 export type SortKey =
   | 'index' | 'url' | 'client' | 'method' | 'status'
-  | 'time' | 'duration' | 'reqSize' | 'respSize';
+  | 'time' | 'duration' | 'reqSize' | 'respSize'
+  | 'edited' | 'note';
 export type SortDir = 'asc' | 'desc';
 export interface SortState {
   key: SortKey;

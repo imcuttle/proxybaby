@@ -13,7 +13,9 @@ import { SettingsView } from './components/SettingsView';
 import { FilterConfigView } from './components/filter-config/FilterConfigView';
 import { FilterEntryEditorView } from './components/filter-config/FilterEntryEditorView';
 import { RuleQuickInputView } from './windows/RuleQuickInputView';
+import { RuleDebugView } from './windows/RuleDebugView';
 import { AiSessionView } from './windows/AiSessionView';
+import { UpdaterView } from './windows/UpdaterView';
 import { ComposerView } from './components/ComposerView';
 import { DiffModal } from './components/DiffModal';
 import { BreakpointModal } from './components/BreakpointModal';
@@ -25,8 +27,8 @@ import { Sparkles, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { Flow } from '../shared/types';
 
 /** 根据 hash 判断当前渲染的是主窗口还是子窗口。 */
-type RouteName = 'main' | 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input' | 'ai-session';
-const CHILD_ROUTES: readonly RouteName[] = ['settings', 'diff', 'filter-config', 'filter-entry-editor', 'rule-quick-input', 'ai-session'] as const;
+type RouteName = 'main' | 'settings' | 'diff' | 'filter-config' | 'filter-entry-editor' | 'rule-quick-input' | 'ai-session' | 'rule-debug' | 'updater';
+const CHILD_ROUTES: readonly RouteName[] = ['settings', 'diff', 'filter-config', 'filter-entry-editor', 'rule-quick-input', 'ai-session', 'rule-debug', 'updater'] as const;
 
 function useRoute(): RouteName {
   const parse = (): RouteName => {
@@ -50,6 +52,8 @@ export function App() {
   if (route === 'filter-entry-editor') return <FilterEntryEditorWindow />;
   if (route === 'rule-quick-input') return <RuleQuickInputWindow />;
   if (route === 'ai-session') return <AiSessionView />;
+  if (route === 'rule-debug') return <RuleDebugWindow />;
+  if (route === 'updater') return <UpdaterWindow />;
   return <MainWindow />;
 }
 
@@ -117,6 +121,30 @@ function RuleQuickInputWindow() {
       <ChildWindowHeader title="快速规则" />
       <div className="flex-1 min-h-0">
         <RuleQuickInputView />
+      </div>
+    </div>
+  );
+}
+
+/** Rule Debug 子窗口：模拟一个请求，看规则匹配 + dry-run 结果。 */
+function RuleDebugWindow() {
+  return (
+    <div className="h-full w-full flex flex-col bg-pb-bg text-pb-text" data-testid="rule-debug-window">
+      <ChildWindowHeader title="Rule Debug" />
+      <div className="flex-1 min-h-0">
+        <RuleDebugView />
+      </div>
+    </div>
+  );
+}
+
+/** 更新提示子窗口：展示 changelog +跳转 GitHub Release。 */
+function UpdaterWindow() {
+  return (
+    <div className="h-full w-full flex flex-col bg-pb-bg text-pb-text" data-testid="updater-window">
+      <ChildWindowHeader title="ProxyBaby 更新" showCloseButton={false} />
+      <div className="flex-1 min-h-0">
+        <UpdaterView />
       </div>
     </div>
   );
@@ -359,13 +387,36 @@ function MainWindow() {
         )}
       </div>
       <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0">
-          {tab === 'flows' ? (
-            <div className="h-full">
-              {leftCollapsed ? (
-                <div className="h-full flex">
-                  <CollapsedLeftRail />
-                  <div className="flex-1 min-w-0 h-full flex flex-col">
+        <div className="flex-1 min-w-0 relative">
+          {/* 三个 tab 始终挂载，仅用display 切换，保留各自 UI state（滚动位置、Monaco 光标、搜索输入等） */}
+          <div className={cn('absolute inset-0', tab === 'flows' ? '' : 'hidden')}>
+            {leftCollapsed ? (
+              <div className="h-full flex">
+                <CollapsedLeftRail />
+                <div className="flex-1 min-w-0 h-full flex flex-col">
+                  <Toolbar />
+                  {searchOpen && <SearchBar onNavigate={navigateHit} />}
+                  <div className="flex-1 min-h-0">
+                    <PanelGroup direction="vertical">
+                      <Panel defaultSize={45} minSize={20}>
+                        <RequestList />
+                      </Panel>
+                      <PanelResizeHandle className="h-px bg-pb-border hover:bg-pb-accent transition-colors" />
+                      <Panel defaultSize={55} minSize={20}>
+                        <DetailPane />
+                      </Panel>
+                    </PanelGroup>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <PanelGroup direction="horizontal">
+                <Panel defaultSize={20} minSize={12}>
+                  <SidebarPanel />
+                </Panel>
+                <PanelResizeHandle className="w-px bg-pb-border hover:bg-pb-accent transition-colors" />
+                <Panel defaultSize={80} minSize={40}>
+                  <div className="h-full flex flex-col">
                     <Toolbar />
                     {searchOpen && <SearchBar onNavigate={navigateHit} />}
                     <div className="flex-1 min-h-0">
@@ -380,42 +431,16 @@ function MainWindow() {
                       </PanelGroup>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <PanelGroup direction="horizontal">
-                  <Panel defaultSize={20} minSize={12}>
-                    <SidebarPanel />
-                  </Panel>
-                  <PanelResizeHandle className="w-px bg-pb-border hover:bg-pb-accent transition-colors" />
-                  <Panel defaultSize={80} minSize={40}>
-                    <div className="h-full flex flex-col">
-                      <Toolbar />
-                      {searchOpen && <SearchBar onNavigate={navigateHit} />}
-                      <div className="flex-1 min-h-0">
-                        <PanelGroup direction="vertical">
-                          <Panel defaultSize={45} minSize={20}>
-                            <RequestList />
-                          </Panel>
-                          <PanelResizeHandle className="h-px bg-pb-border hover:bg-pb-accent transition-colors" />
-                          <Panel defaultSize={55} minSize={20}>
-                            <DetailPane />
-                          </Panel>
-                        </PanelGroup>
-                      </div>
-                    </div>
-                  </Panel>
-                </PanelGroup>
-              )}
-            </div>
-          ) : tab === 'rules' ? (
-            <div className="h-full">
-              <RulesView />
-            </div>
-          ) : (
-            <div className="h-full">
-              <ComposerView />
-            </div>
-          )}
+                </Panel>
+              </PanelGroup>
+            )}
+          </div>
+          <div className={cn('absolute inset-0', tab === 'rules' ? '' : 'hidden')}>
+            <RulesView />
+          </div>
+          <div className={cn('absolute inset-0', tab === 'composer' ? '' : 'hidden')}>
+            <ComposerView />
+          </div>
         </div>
         {aiPanelOpen && aiEnabled && (
           <div className="w-[380px] shrink-0 border-l border-pb-border">

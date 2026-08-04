@@ -18,6 +18,7 @@ const bridge: ProxyBabyBridge = {
   reinstallCert: () => ipcRenderer.invoke('cert:reinstall'),
   getFlows: () => ipcRenderer.invoke('flow:all') as Promise<Flow[]>,
   rulesList: () => ipcRenderer.invoke('rules:list'),
+  rulesGet: (id) => ipcRenderer.invoke('rules:get', id),
   rulesAdd: (name, text, enabled) => ipcRenderer.invoke('rules:add', name, text, enabled),
   rulesUpdate: (id, patch) => ipcRenderer.invoke('rules:update', id, patch),
   rulesRemove: (id) => ipcRenderer.invoke('rules:remove', id),
@@ -27,6 +28,9 @@ const bridge: ProxyBabyBridge = {
   rulesClearTemp: () => ipcRenderer.invoke('rules:clear-temp'),
   ruleQuickInputOpen: (params) => ipcRenderer.invoke('ruleQuickInput:open', params),
   ruleQuickInputConsumeInit: () => ipcRenderer.invoke('ruleQuickInput:consumeInit'),
+  ruleDebugRun: (input) => ipcRenderer.invoke('ruleDebug:run', input),
+  ruleDebugOpen: (prefill) => ipcRenderer.invoke('ruleDebug:open', prefill),
+  ruleDebugConsumeInit: () => ipcRenderer.invoke('ruleDebug:consumeInit'),
   dialogPickFile: () => ipcRenderer.invoke('dialog:pick-file'),
   pluginsList: () => ipcRenderer.invoke('plugins:list'),
   pluginsSetEnabled: (id, enabled) => ipcRenderer.invoke('plugins:set-enabled', id, enabled),
@@ -75,6 +79,12 @@ const bridge: ProxyBabyBridge = {
   aiSetConfig: (patch) => ipcRenderer.invoke('ai:set-config', patch),
   aiListSkills: () => ipcRenderer.invoke('ai:list-skills'),
   aiPickFile: () => ipcRenderer.invoke('ai:pick-file'),
+  // Updater
+  updaterCheck: (silent) => ipcRenderer.invoke('updater:check', silent),
+  updaterGetLast: () => ipcRenderer.invoke('updater:get-last'),
+  updaterSkip: (v) => ipcRenderer.invoke('updater:skip', v),
+  updaterRemindLater: () => ipcRenderer.invoke('updater:remind-later'),
+  updaterOpenRelease: (url) => ipcRenderer.invoke('updater:open-release', url),
 };
 
 contextBridge.exposeInMainWorld('proxybaby', bridge);

@@ -113,19 +113,42 @@ export async function cleanupStaleProxyPointingAt(host: string, port: number): P
  * 紧急同步还原：**只**在进程即将崩溃或收到致命信号时使用。
  * 直接对已知的 appliedServices 做同步 networksetup 调用，会短暂阻塞事件循环，但能保证
  * 在 process.exit() 之前完成 —— 换取代理配置一定被清掉。
+ *
+ * @param host - 可选：若提供，会额外扫描所有网络服务，关掉指向此 host:port 的残留代理，
+ *               防御 appliedServices 未记录全的情况（如 apply 时部分失败、或运行时被外部改写）。
+ * @param port - 可选：与 host 配合使用。
  */
-export function revertSystemProxySync(): void {
-  const svcs = appliedServices;
-  if (svcs.length === 0) return;
-  for (const svc of svcs) {
-    try {
-      execFileSync('networksetup', ['-setwebproxystate', svc, 'off'], { timeout: 1000, stdio: 'ignore' });
-    } catch {}
-    try {
-      execFileSync('networksetup', ['-setsecurewebproxystate', svc, 'off'], { timeout: 1000, stdio: 'ignore' });
-    } catch {}
-  }
+export function revertSystemProxySync(host?: string, port?: number): void {
+  // 1) 先按内存里的 appliedServices 清（快路径）
+  const svcs = [...appliedServices];
   appliedServices = [];
+  for (const svc of svcs) {
+    try { execFileSync('networksetup', ['-setwebproxystate', svc, 'off'], { timeout: 1000, stdio: 'ignore' }); } catch {}
+    try { execFileSync('networksetup', ['-setsecurewebproxystate', svc, 'off'], { timeout: 1000, stdio: 'ignore' }); } catch {}
+  }
+
+  // 2) 如果知道 host:port，再扫一遍所有服务，兜底关掉指向我们的残留代理
+  if (host && port != null) {
+    try {
+      const out = execFileSync('networksetup', ['-listallnetworkservices'], { timeout: 1500, encoding: 'utf8' });
+      const services = out.split('\n').slice(1).map((s) => s.trim()).filter((s) => s && !s.startsWith('*'));
+      const target = `${host}:${port}`;
+      for (const svc of services) {
+        try {
+          const web = execFileSync('networksetup', ['-getwebproxy', svc], { timeout: 800, encoding: 'utf8' });
+          const sec = execFileSync('networksetup', ['-getsecurewebproxy', svc], { timeout: 800, encoding: 'utf8' });
+          const hits = (o: string): boolean => {
+            if (!/Enabled:\s*Yes/i.test(o)) return false;
+            const s = /Server:\s*(\S+)/i.exec(o)?.[1];
+            const p = /Port:\s*(\d+)/i.exec(o)?.[1];
+            return `${s}:${p}` === target;
+          };
+          if (hits(web)) { try { execFileSync('networksetup', ['-setwebproxystate', svc, 'off'], { timeout: 800, stdio: 'ignore' }); } catch {} }
+          if (hits(sec)) { try { execFileSync('networksetup', ['-setsecurewebproxystate', svc, 'off'], { timeout: 800, stdio: 'ignore' }); } catch {} }
+        } catch { /* per-service ignore */ }
+      }
+    } catch { /* ignore */ }
+  }
 }
 
 /**

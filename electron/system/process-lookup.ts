@@ -1,12 +1,11 @@
 /**
  * 通过本地端口反查发起进程（macOS）。
  * 用 lsof 查 TCP 本地端口 → PID → 进程名 / 可执行路径。
- * 结果短期缓存（3s）避免每请求都 fork。
- * 图标：从可执行路径向上找 .app 根目录，用 Electron `app.getFileIcon` 拿 16x16 icon，
+ * 结果短期缓存（3s）避免每请求都fork。
+ * 图标：从可执行路径向上找.app 根目录，用 Electron `app.getFileIcon` 拿 16x16 icon，
  *      转成 data URL 常驻缓存（按 bundlePath key），避免重复 IO。
  *
- * 环境变量 PROXYBABY_DEBUG_PROC=1 会把每一步失败/结果打印到 stdout，方便定位
- * "app icon 拿不到" / "客户端识别为未知" 之类的问题。
+ * 日志：通过统一 logger（scope=proc-lookup）打debug。生产环境默认 debug 级已开启。
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -14,11 +13,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app, nativeImage } from 'electron';
 import type { AppInfo } from '../../shared/types';
+import { getLogger } from '../util/logger';
 
 const pexec = promisify(execFile);
-
-const DEBUG = process.env.PROXYBABY_DEBUG_PROC === '1';
-function dlog(...args: unknown[]) { if (DEBUG) console.log('[proc-lookup]', ...args); }
+const log = getLogger('proc-lookup');
+const dlog = (...args: unknown[]) => log.debug(...args);
 
 interface CacheEntry {
   info: AppInfo | null;
@@ -112,27 +111,41 @@ export async function lookupByPort(port: number): Promise<AppInfo | null> {
         dlog(`pid=${pid} lsof -d txt 失败`, (e as Error)?.message);
       }
       // 兜底：lsof -d txt 失败时退回 ps。用 -ww 关行宽截断，再切掉参数。
-      if (!execPath) {
+    if (!execPath) {
         try {
           const { stdout: p3 } = await pexec('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { timeout: 2000 });
-          const line = p3.split('\n')[0]?.trim();
+     const line = p3.split('\n')[0]?.trim();
           if (line) {
-            const sp = line.indexOf(' ');
+   const sp = line.indexOf(' ');
             execPath = sp > 0 ? line.slice(0, sp) : line;
           }
         } catch (e) {
           dlog(`pid=${pid} ps 兜底失败`, (e as Error)?.message);
         }
+    }
+      let bundlePath = execPath ? findAppBundle(execPath) : undefined;
+      let ancestorExec: string | undefined;
+      let ancestorCmd: string | undefined;
+      // 如果自己没 bundle（典型：node/python 这类 CLI 解释器），沿 PPID 链向上找
+      // 第一个属于某个 .app bundle 的祖先——CLI 通常是终端 app（iTerm2 / Terminal /
+      // cmux 等）启动的子进程，用祖先的图标和 name 展示比 "node" 更有意义。
+      if (!bundlePath) {
+        const ancestor = await findAncestorAppProcess(pid);
+    if (ancestor) {
+      bundlePath = ancestor.bundlePath;
+          ancestorExec = ancestor.execPath;
+        ancestorCmd = ancestor.cmd;
+dlog(`pid=${pid} 用祖先 app: pid=${ancestor.pid} bundle=${bundlePath}`);
+        }
       }
-      const bundlePath = execPath ? findAppBundle(execPath) : undefined;
       const bundleId = bundlePath ? await readBundleId(bundlePath) : undefined;
-      const iconDataUrl = await resolveIcon(bundlePath, execPath);
+ const iconDataUrl = await resolveIcon(bundlePath, ancestorExec ?? execPath);
       info = {
         pid,
-        name: friendlyAppName(execPath, cmd, bundlePath),
-        execPath,
+        name: friendlyAppName(ancestorExec ?? execPath, ancestorCmd ?? cmd, bundlePath),
+ execPath,
         bundlePath,
-        bundleId,
+  bundleId,
         iconDataUrl,
       };
       dlog(`port=${port} → pid=${pid} exec=${execPath} bundle=${bundlePath} icon=${iconDataUrl ? 'ok' : 'MISSING'}`);
@@ -172,19 +185,66 @@ function friendlyAppName(execPath: string | undefined, fallback: string, bundleP
 }
 
 /**
- * 从可执行路径向上找到最近的 bundle 根目录。
- * 依次匹配：
- *   - *.app  （GUI 应用）
- *   - *.xpc  （XPC service，也有 Info.plist / 图标）
- *   - *.bundle
- *   - *.framework
- * 找不到 → undefined（守护进程 / /usr/libexec/xxx）。
+ * 从可执行路径向上找到 bundle 根目录。
+ *
+ * 策略：
+ *   - `.app` 取**最外层**（最左边一个）。这样 Chrome/VSCode/Electron 类应用的
+ *     `.../Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/...` 会归到
+ *     主 app（Google Chrome.app），拿到主 icon 和主 name，而不是 helper.app 那个
+ *     几乎全空的图标外壳。
+ *   -其它 bundle（`.xpc` / `.bundle` / `.framework`）保持取最近一层（它们通常独立分发）。
+ *   - 都找不到 → undefined（守护进程 / /usr/libexec/xxx）。
  */
-function findAppBundle(execPath: string): string | undefined {
-  const SUFFIXES = ['.app/', '.xpc/', '.bundle/', '.framework/'];
-  for (const suf of SUFFIXES) {
+export function findAppBundle(execPath: string): string | undefined {
+  // 最外层 .app
+  const appIdx = execPath.indexOf('.app/');
+  if (appIdx >= 0) return execPath.slice(0, appIdx + '.app'.length);
+  // 其它 bundle 后缀：仍取最近一层
+  for (const suf of ['.xpc/', '.bundle/', '.framework/']) {
     const idx = execPath.lastIndexOf(suf);
     if (idx >= 0) return execPath.slice(0, idx + suf.length - 1);
+  }
+  return undefined;
+}
+
+interface AncestorAppInfo {
+  pid: number;
+  bundlePath: string;
+  execPath: string;
+  cmd: string;
+}
+
+/**
+ * 沿 PPID 链向上找第一个属于 .app bundle 的祖先进程。
+ * 用于 node/python 等 CLI 解释器：本身没图标，但它的启动祖先（iTerm2 / Terminal /
+ * cmux / VSCode 等 GUI app）有真实图标。
+ *
+ * 一次 `ps -Ao pid=,ppid=,command=` 拿全表，避免每级 pid 都 fork 一次 ps。
+ * 最多走 8 层，防止环状 ppid（理论上不该有，但保险）。
+ */
+async function findAncestorAppProcess(startPid: number): Promise<AncestorAppInfo | undefined> {
+  try {
+    const { stdout } = await pexec('ps', ['-Awwo', 'pid=,ppid=,command='], { timeout: 2000 });
+    const table = new Map<number, { ppid: number; cmd: string }>();
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+  if (!m) continue;
+      table.set(Number(m[1]), { ppid: Number(m[2]), cmd: m[3] });
+    }
+    let pid = table.get(startPid)?.ppid;
+    for (let i = 0; i < 8 && pid && pid > 1; i++) {
+   const row = table.get(pid);
+   if (!row) break;
+      const sp = row.cmd.indexOf(' ');
+      const execPath = sp > 0 ? row.cmd.slice(0, sp) : row.cmd;
+const bundlePath = findAppBundle(execPath);
+      if (bundlePath) {
+     return { pid, bundlePath, execPath, cmd: row.cmd };
+      }
+      pid = row.ppid;
+}
+  } catch (e) {
+    dlog(`findAncestorAppProcess(${startPid}) 失败`, (e as Error)?.message);
   }
   return undefined;
 }
@@ -207,60 +267,69 @@ async function readBundleId(bundlePath: string): Promise<string | undefined> {
 /**
  * 尝试拿 icon dataURL：
  *   1. 优先按 bundlePath 走 app.getFileIcon（cache）
- *   2. bundle 存在但 getFileIcon 返回空 → 手工读 Contents/Resources/*.icns
+ *   2. bundle 存在但 getFileIcon 返回空/极小 → 手工读 Contents/Resources/*.icns
  *   3. 没 bundle → 尝试 execPath 走 getFileIcon（macOS 会给通用图标）
  *   4. 都失败 → undefined
+ *
+ * 注意：不做 resize（16x16）——某些 Electron 版本的 nativeImage.resize 会返回空图，
+ * 直接把 32x32 的原图 dataURL 交给渲染层用 CSS 控制显示尺寸更稳。
  */
 async function resolveIcon(bundlePath: string | undefined, execPath: string | undefined): Promise<string | undefined> {
   if (bundlePath) {
     const cached = iconCache.get(bundlePath);
     if (cached) return cached;
-    try {
-      const img = await app.getFileIcon(bundlePath, { size: 'normal' });
-      if (!img.isEmpty()) {
-        const url = img.resize({ width: 16, height: 16 }).toDataURL();
-        iconCache.set(bundlePath, url);
-        return url;
-      }
-      dlog(`getFileIcon(bundle=${bundlePath}) 返回空 image，尝试读 .icns`);
-    } catch (e) {
-      dlog(`getFileIcon(bundle=${bundlePath}) 抛错`, (e as Error)?.message);
-    }
-    // 手工读 icns 兜底
+    // 优先手工读 Contents/Resources/*.icns —— app.getFileIcon 在未签名/未授权 TCC 场景下
+    // 常常只能拿到"UTType 通用占位图"（macOS 15 上实测每个不同 .app 都是同一张
+    // 1634-byte 透明轮廓）。直接读 icns 才拿得到真实图标。
     const icnsUrl = await readIcnsFromBundle(bundlePath);
     if (icnsUrl) {
       iconCache.set(bundlePath, icnsUrl);
+   dlog(`readIcnsFromBundle(${bundlePath}) ok len=${icnsUrl.length}`);
       return icnsUrl;
+    }
+    // 兜底：icns 找不到（比如非常规 bundle 结构），再试 getFileIcon
+    try {
+      const img = await app.getFileIcon(bundlePath, { size: 'normal' });
+      if (!img.isEmpty()) {
+        const url = img.toDataURL();
+    if (url) {
+          iconCache.set(bundlePath, url);
+       dlog(`getFileIcon(bundle=${bundlePath}) fallback ok len=${url.length}`);
+          return url;
+        }
+      }
+      dlog(`getFileIcon(bundle=${bundlePath}) 返回空 image`);
+    } catch (e) {
+ dlog(`getFileIcon(bundle=${bundlePath}) 抛错`, (e as Error)?.message);
     }
   }
   if (execPath) {
     const cached = execIconCache.get(execPath);
     if (cached) return cached;
-    try {
-      const img = await app.getFileIcon(execPath, { size: 'normal' });
-      if (!img.isEmpty()) {
-        const url = img.resize({ width: 16, height: 16 }).toDataURL();
-        execIconCache.set(execPath, url);
-        return url;
-      }
-      dlog(`getFileIcon(exec=${execPath}) 返回空 image`);
-    } catch (e) {
-      dlog(`getFileIcon(exec=${execPath}) 抛错`, (e as Error)?.message);
-    }
+    // execPath 分支只对"能直接读到图标"的可执行文件才有意义。node/python 等解释器
+    // 通过 getFileIcon 拿到的都是空占位，不如返回 undefined 让渲染层显示 Package fallback。
+    // 只在 execPath 明确是某种"应用主二进制"时才尝试。这里保守起见直接跳过。
+  dlog(`skip execPath icon lookup (${execPath}) —— 通常只能拿到占位符`);
   }
   return undefined;
 }
 
 /**
- * bundle 内手工找 .icns 并转成 16x16 dataURL。
- * getFileIcon 在沙盒/权限不足时可能失败，此路径直接读文件。
+ * bundle 内手工找 .icns 并转成 dataURL。
+ *
+ * 为什么不用 `nativeImage.createFromPath(icns)`？
+ *   实测在 macOS 15 + Electron 32 上，某些 app 的 icns（如 Google Chrome/VS Code
+ *   等自签发或多分辨率格式）会被 Electron 认为 empty，即便文件本身是完整的 icns。
+ *   于是我们退而求其次：手工解析 icns 二进制结构，直接抽出内嵌的第一个 PNG frame。
+ *   icns 从 Mac OS X 10.7 起支持 PNG 编码的图标（type=ic07/08/09/10/11/12/13/14），
+ *现代 app 的图标基本都是 PNG 内嵌。
  */
 async function readIcnsFromBundle(bundlePath: string): Promise<string | undefined> {
   try {
     // 首选 Info.plist 里指定的 CFBundleIconFile / CFBundleIconName
     let iconName: string | undefined;
     try {
-      const info = await fs.readFile(path.join(bundlePath, 'Contents', 'Info.plist'), 'utf8');
+  const info = await fs.readFile(path.join(bundlePath, 'Contents', 'Info.plist'), 'utf8');
       const m = info.match(/<key>CFBundleIconFile<\/key>\s*<string>([^<]+)<\/string>/)
         || info.match(/<key>CFBundleIconName<\/key>\s*<string>([^<]+)<\/string>/);
       if (m) iconName = m[1].trim();
@@ -277,20 +346,64 @@ async function readIcnsFromBundle(bundlePath: string): Promise<string | undefine
     if (!icnsFile) {
       // 兜底：Resources 下第一个 .icns
       try {
-        const entries = await fs.readdir(resDir);
+const entries = await fs.readdir(resDir);
         const first = entries.find((f) => f.toLowerCase().endsWith('.icns'));
         if (first) icnsFile = path.join(resDir, first);
-      } catch {}
+   } catch {}
     }
     if (!icnsFile) return undefined;
+    const buf = await fs.readFile(icnsFile);
+  const pngUrl = extractPngFromIcns(buf);
+    if (pngUrl) return pngUrl;
+// 若 icns 里没有 PNG frame（老格式），退回 nativeImage
     const img = nativeImage.createFromPath(icnsFile);
     if (img.isEmpty()) {
-      dlog(`nativeImage(${icnsFile}) 为空`);
+  dlog(`nativeImage(${icnsFile}) 为空`);
       return undefined;
     }
-    return img.resize({ width: 16, height: 16 }).toDataURL();
+    return img.toDataURL();
   } catch (e) {
     dlog(`readIcnsFromBundle(${bundlePath}) 失败`, (e as Error)?.message);
     return undefined;
   }
+}
+
+/**
+ * 从 icns 二进制里抽出**最大**的 PNG frame，编码成 dataURL。
+ *
+ * icns 结构：
+ *   [0..4)   magic = "icns"
+ *   [4..8)   total file size (big-endian uint32)
+ *   [8..) 一连串 8-byte header + payload：
+ *  [0..4)  type (4-char code, e.g. "ic07"/"ic08")
+ *         [4..8)  record size including header (big-endian uint32)
+ *   [8..) payload
+ *
+ * PNG-encoded 图标 type: ic04(16), ic05(32), ic07(128), ic08(256), ic09(512),
+ *    ic10(1024), ic11(32 retina), ic12(64), ic13(256 retina),
+ *        ic14(512 retina)。payload 直接就是完整 PNG 文件（89 50 4E 47 开头）。
+ */
+function extractPngFromIcns(buf: Buffer): string | undefined {
+  if (buf.length < 16 || buf.toString('ascii', 0, 4) !== 'icns') return undefined;
+  let offset = 8;
+  let best: Buffer | undefined;
+  while (offset + 8 <= buf.length) {
+    const size = buf.readUInt32BE(offset + 4);
+    if (size < 8 || offset + size > buf.length) break;
+    const payload = buf.subarray(offset + 8, offset + size);
+    // PNG magic: 89 50 4E 47 0D 0A 1A 0A
+    if (
+      payload.length > 8 &&
+      payload[0] === 0x89 &&
+      payload[1] === 0x50 &&
+   payload[2] === 0x4e &&
+    payload[3] === 0x47
+    ) {
+      // 挑最大的（通常是最高分辨率）
+      if (!best || payload.length > best.length) best = payload;
+    }
+    offset += size;
+  }
+  if (!best) return undefined;
+  return `data:image/png;base64,${best.toString('base64')}`;
 }

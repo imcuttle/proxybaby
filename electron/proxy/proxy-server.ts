@@ -67,6 +67,12 @@ export class ProxyServer extends EventEmitter {
   private lastTxAt0 = 0;
   // 用户禁用 MITM 的 host（CONNECT 直连不解密）
   private mitmDisabledHosts = new Set<string>();
+  // MITM 数据流内部环回 socket 的 localPort → 真实外部客户端 remotePort。
+  // 用途：MITM 场景下 req.socket.remotePort 是内部 127.0.0.1 环回连接的端口（属于
+  // ProxyBaby 自己进程），无法用 lsof 反查发起应用。onConnect 里建立内部 upstream 时
+  // 记下"internalPort → externalPort"，secureConnection 时把外部端口挂到 tlsSocket 上，
+  // buildFlow 优先读取这个真实外部端口。upstream 关闭/错误立即清理。
+  private clientPortByInternalPort = new Map<number, number>();
 
   setHostMitmDisabled(host: string, disabled: boolean) {
     if (disabled) this.mitmDisabledHosts.add(host);
@@ -124,6 +130,15 @@ export class ProxyServer extends EventEmitter {
     this.server.on('request', (req, res) => this.onRequest(req, res, false));
     this.server.on('connect', (req, socket, head) => this.onConnect(req, socket as net.Socket, head));
     this.server.on('upgrade', (req, socket, head) => this.onUpgrade(req, socket as net.Socket, head, false));
+    // 连接一建立就 warm lookup —— 此刻 lsof 命中率最高（连接活着、未关闭）。
+    // 3s TTL 缓存保证后续 onRequest/onConnect/buildFlow 直接命中；
+    // 非阻塞：这里不 await。
+    this.server.on('connection', (socket) => {
+      const rp = socket.remotePort;
+      if (rp && !lookupByPortCached(rp)) {
+        lookupByPort(rp).catch(() => {});
+      }
+    });
     this.server.on('clientError', (err, socket) => {
       try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch {}
     });
@@ -176,14 +191,17 @@ export class ProxyServer extends EventEmitter {
     }
 
     const flow = this.buildFlow(req, isTLS);
-    this.emit('flow:start', flow);
 
+    // 先跑规则匹配再emit flow:start：`flow:start` 通过 IPC broadcast 会做 structured clone，
+    // 之后对 flow 引用的赋值不会再同步到renderer；因此必须先把 matchedRules/edited 挂上再发。
     const plugins = this.plugins;
     const pluginOut = plugins
       ? plugins.collectMiddlewares(flow.request.url, flow.request.scheme, `${flow.request.host}${flow.request.path}`)
       : { middlewares: [], matched: [], hints: { needsReqBodyBuffer: false, needsResBodyBuffer: false } };
     flow.matchedRules = pluginOut.matched;
     if (pluginOut.matched.length > 0) flow.edited = true;
+
+    this.emit('flow:start', flow);
 
     const needsReqBuf = pluginOut.hints?.needsReqBodyBuffer ?? false;
     const needsResBuf = pluginOut.hints?.needsResBodyBuffer ?? false;
@@ -269,6 +287,10 @@ export class ProxyServer extends EventEmitter {
     // 若有响应（可能来自 respond 短路，或 forwardUpstream 已回填）
     if (ctx.short?.kind === 'respond') {
       ctx.response = ctx.short.response;
+      // 短路路径 forwardUpstream 未跑，需要手动补 response-headers 事件让 renderer 的 flow.response
+      // 就绪；否则后续 flow:response-body 会被 onResponseBody 的 `!f.response` 早退丢掉，
+      // UI 上 Body/原始 tab 会一直显示"暂无数据"。
+      this.emit('flow:response-headers', { id: flow.id, response: ctx.response });
     }
     const response = ctx.response;
     if (!response) {
@@ -677,9 +699,10 @@ export class ProxyServer extends EventEmitter {
     const recStore = getRecordFilterStore();
     let appName: string | undefined;
     const remotePort = clientSocket.remotePort;
-    if (remotePort && (sslList || recStore)) {
-      // 关键路径不阻塞：只读缓存；未命中就按 host 判断（99% 场景够用），
-      // 同时后台触发一次 lookup 补缓存，供后续同端口连接命中。
+    // 早在 CONNECT 阶段就 warm 一次 lookup：此刻连接刚建立，lsof 命中率最高；
+    // 结果进 3s TTL 缓存，后续 buildFlow 直接命中，UI 上"未知"占比大幅下降。
+    // 不阻塞：关键路径只读缓存。
+    if (remotePort) {
       appName = lookupByPortCached(remotePort)?.name;
       if (!appName) lookupByPort(remotePort).catch(() => {});
     }
@@ -705,11 +728,22 @@ export class ProxyServer extends EventEmitter {
       const tlsServer = await this.getOrCreateTlsServer(host, port);
       const address = tlsServer.address() as net.AddressInfo;
       clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      const externalRemotePort = clientSocket.remotePort;
       const upstream = net.connect(address.port, '127.0.0.1', () => {
+        // 连上之后 upstream.localPort 才稳定；此时登记映射，供 secureConnection 读取
+        const internalPort = upstream.localPort;
+        if (internalPort != null && externalRemotePort != null) {
+          this.clientPortByInternalPort.set(internalPort, externalRemotePort);
+        }
         if (head && head.length) upstream.write(head);
         clientSocket.pipe(upstream).pipe(clientSocket);
       });
-      upstream.on('error', () => clientSocket.destroy());
+      const cleanup = () => {
+        const p = upstream.localPort;
+        if (p != null) this.clientPortByInternalPort.delete(p);
+      };
+      upstream.once('close', cleanup);
+      upstream.on('error', () => { cleanup(); clientSocket.destroy(); });
       clientSocket.on('error', () => upstream.destroy());
     } catch (err) {
       clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
@@ -735,6 +769,15 @@ export class ProxyServer extends EventEmitter {
     innerHttp.on('upgrade', (req, socket, head) => this.onUpgrade(req, socket as net.Socket, head, true));
     tlsServer.on('secureConnection', (tlsSocket) => {
       (tlsSocket as any).__pbTarget = { host, port: targetPort };
+      // MITM 场景：tlsSocket.remotePort 是内部环回连接 upstream 的 localPort（同为ProxyBaby
+      // 自身进程），拿它去 lsof 只会命中 self 被排除掉。用 onConnect 里登记的
+      // internalPort→externalPort 映射反查出真正的外部客户端 remotePort，挂到 tlsSocket
+      // 上，供 buildFlow 使用。
+      const internalPort = tlsSocket.remotePort;
+      const externalPort = internalPort != null
+        ? this.clientPortByInternalPort.get(internalPort)
+        : undefined;
+      if (externalPort != null) (tlsSocket as any).__pbClientRemotePort = externalPort;
       (innerHttp as any).emit('connection', tlsSocket);
     });
 
@@ -782,7 +825,9 @@ export class ProxyServer extends EventEmitter {
       contentType,
       startedAt: Date.now(),
     };
-    const remotePort = req.socket.remotePort;
+    // MITM 场景下 req.socket 是内部 tlsSocket，其remotePort 是内部环回端口（ProxyBaby 自己），
+    // 无法反查发起应用。优先用 CONNECT 阶段透传下来的真实外部客户端 remotePort。
+    const remotePort = (req.socket as any).__pbClientRemotePort ?? req.socket.remotePort;
     // app 反查（lsof）不能阻塞关键路径 —— 它只是 UI 元数据，晚几十/几百毫秒到达完全无关紧要。
     // 首选 in-memory 缓存快速填充；未命中就先留空，后台异步反查完成后通过 flow:app-info 事件补上。
     const cachedApp = remotePort ? lookupByPortCached(remotePort) || undefined : undefined;

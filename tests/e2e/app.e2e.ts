@@ -3,6 +3,15 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {
+  injectFlow as _injectFlow,
+  ensureBaseFlows as _ensureBaseFlows,
+  resetFilters as _resetFilters,
+  aiFlow as _aiFlow,
+  openSettingsWindow as _openSettingsWindow,
+  openFilterConfigWindow as _openFilterConfigWindow,
+  waitForEntryEditorWindow as _waitForEntryEditorWindow,
+} from './_shared';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -34,13 +43,9 @@ test.afterAll(async () => {
   fs.rmSync(userDataDir, { recursive: true, force: true });
 });
 
-// 注入一个 flow 的辅助：通过 E2E 通道按事件序列灌入
+// 注入一个 flow 的辅助：通过 E2E 通道按事件序列灌入（delegates to _shared）
 async function injectFlow(flow: any, events: { event: string; payload: any }[] = []) {
-  await page.evaluate(async ({ flow, events }) => {
-    const e = (window as any).__pbE2E;
-    await e.emit('flow:start', flow);
-    for (const ev of events) await e.emit(ev.event, ev.payload);
-  }, { flow, events });
+  await _injectFlow(page, flow, events);
 }
 
 test('应用启动并显示主界面（工具栏+抓包标签）', async () => {
@@ -79,6 +84,227 @@ test('抓包：注入普通请求后出现在列表并可查看详情', async ()
   await expect(page.getByText('https://api.demo.com/users').first()).toBeVisible();
   // Request headers Tab（默认 headers）
   await expect(page.getByText('Accept').first()).toBeVisible();
+});
+
+test('mock 规则命中：Response Body 显示 mock 内容 + 列表出现「已编辑」✓标记', async () => {
+  // 覆盖历史 bug：短路路径（respond）不发flow:response-headers 导致 UI 上 flow.response 为
+  // undefined，Body/原始 tab 显示"暂无数据"；同时 flow:start 提前于 edited 赋值导致列表看不到
+  // 已编辑标记。这里以事件序列复现 fix 后的真实主进程行为并做断言。
+  await injectFlow(
+    {
+      id: 'f-mock',
+      status: 'pending',
+      isTLS: true,
+      sseFrames: [],
+      edited: true,
+      matchedRules: [{ruleSetId: 'rs-1', ruleSetName: '测试集', lineNo: 1, pattern: 'demo.com', ops: [{ op: 'mock', value: '{"a":1}' }] } as any],
+      app: { name: 'node', pid: 42 },
+      request: { method: 'GET', url: 'https://demo.com/mocked', host: 'demo.com', path: '/mocked', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: Date.now(), contentType: '' },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-mock', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [{ name: 'content-type', value: 'application/json' }], bodySize: 7, isSSE: false, contentType: 'application/json' } } },
+      { event: 'flow:response-body', payload: { id: 'f-mock', bodyText: '{"a":1}', bodySize: 7 } },
+      { event: 'flow:end', payload: { id: 'f-mock', durationMs: 5, status: 'completed' } },
+    ],
+  );
+
+  const row = page.locator('[data-testid="flow-row"][data-flow-id="f-mock"]');
+  await expect(row).toBeVisible();
+  // 已编辑标记（RequestList 里用 ✓ 显示在edited 列）
+  await expect(row).toContainText('✓');
+
+  await row.click();
+  // Response 区的「正文」tab
+  await page.getByRole('tab', { name: '正文' }).last().click();
+  // 不能是"空body"
+  await expect(page.getByTestId('body-empty')).toHaveCount(0);
+  // 展示的是mock 内容
+  await expect(page.getByTestId('body-view').getByText(/"a"/).first()).toBeVisible();
+});
+
+test('已编辑标记：hover 展示命中规则 tooltip + 点击跳转规则页并focus 到规则行', async () => {
+  // 1) 先在规则页新建一个规则集，拿到真实的 ruleSetId
+  await page.getByRole('button', { name: '规则', exact: true }).click();
+  const created = await page.evaluate(async () => {
+    const api = (window as any).proxybaby;
+    return await api.rulesAdd('e2e-matched', 'example.com/x foo://bar\n', true);
+  });
+  const ruleSetId: string = (created as any)?.id;
+  expect(ruleSetId).toBeTruthy();
+
+  // 2) 回抓包页，注入一个带 matchedRules 的flow
+  await page.getByRole('button', { name: '抓包' }).click();
+  await injectFlow(
+    {
+      id: 'f-hover',
+      status: 'completed',
+      isTLS: true,
+      sseFrames: [],
+      edited: true,
+      note: '测试备注文本',
+      matchedRules: [{ ruleId: ruleSetId, ruleName: 'e2e-matched', pattern: 'example.com/x', lineNo: 1 }],
+      app: { name: 'node', pid: 42 },
+      request: { method: 'GET', url: 'https://example.com/x', host: 'example.com', path: '/x', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: Date.now(), contentType: '' },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-hover', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: false, contentType: 'text/plain' } } },
+      { event: 'flow:end', payload: { id: 'f-hover', durationMs: 1, status: 'completed' } },
+    ],
+  );
+
+  const row = page.locator('[data-testid="flow-row"][data-flow-id="f-hover"]');
+  await expect(row).toBeVisible();
+
+  // 3) 备注单元格应该显示文本（不是 icon）
+  await expect(row).toContainText('测试备注文本');
+
+  // 4) hover 已编辑 badge →弹自定义 tooltip，包含规则名 + pattern
+  const badge = row.getByTestId('edited-badge');
+  await expect(badge).toBeVisible();
+  await badge.hover();
+  const item = page.getByTestId('matched-rule-item').first();
+  await expect(item).toBeVisible();
+  await expect(item).toContainText('e2e-matched');
+  await expect(item).toContainText('example.com/x');
+
+  // 5) 点击→ 应切到规则页，并选中该规则集
+  await item.click();
+  await expect(page.getByTestId('rules-mode-tabs')).toBeVisible();
+  // 编辑器内容应加载出目标规则集
+  await expect(page.locator('.monaco-editor .view-line').getByText(/example\.com\/x/).first()).toBeVisible();
+
+  // 清理
+  await page.evaluate(async (id) => await (window as any).proxybaby.rulesRemove(id), ruleSetId);
+});
+
+test('列排序：已编辑 / 备注 两列表头点击后按值排序', async () => {
+  // 前一个测试结束在规则页，切回抓包页。
+  await page.getByRole('button', { name: '抓包' }).click();
+
+  // 注入 3 个 flow：
+  //  f-sort-a: 无edited、无 note
+  //  f-sort-b: edited=true、note='alpha'
+  //  f-sort-c: edited=false、note='zeta'
+  // 默认按抓包顺序 [a, b, c]。
+  const now = Date.now();
+  await injectFlow(
+    { id: 'f-sort-a', status: 'completed', isTLS: false, sseFrames: [],
+      app: { name: 'node', pid: 501 },
+      request: { method: 'GET', url: 'https://sort.test/a', host: 'sort.test', path: '/a', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: now, contentType: '' } },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-sort-a', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: false, contentType: 'text/plain' } } },
+      { event: 'flow:end', payload: { id: 'f-sort-a', durationMs: 1, status: 'completed' } },
+    ],
+  );
+  await injectFlow(
+    { id: 'f-sort-b', status: 'completed', isTLS: false, sseFrames: [], edited: true, note: 'alpha',
+      app: { name: 'node', pid: 502 },
+      request: { method: 'GET', url: 'https://sort.test/b', host: 'sort.test', path: '/b', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: now + 1, contentType: '' } },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-sort-b', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: false, contentType: 'text/plain' } } },
+      { event: 'flow:end', payload: { id: 'f-sort-b', durationMs: 1, status: 'completed' } },
+    ],
+  );
+  await injectFlow(
+    { id: 'f-sort-c', status: 'completed', isTLS: false, sseFrames: [], note: 'zeta',
+      app: { name: 'node', pid: 503 },
+      request: { method: 'GET', url: 'https://sort.test/c', host: 'sort.test', path: '/c', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: now + 2, contentType: '' } },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-sort-c', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: false, contentType: 'text/plain' } } },
+      { event: 'flow:end', payload: { id: 'f-sort-c', durationMs: 1, status: 'completed' } },
+    ],
+  );
+
+  // 借助 store 上的 sort 状态直接触发 cycleSort，绕开 header 元素定位（表头无 testid）。
+  // 用URL 过滤，只留下这 3 条待排序 flow，避免受其他测试注入 flow 干扰。
+  await page.evaluate(() => {
+    const store = (window as any).__pbStore;
+    store.getState().setFilter({ ...store.getState().filter, text: 'sort.test', scope: 'url', mode: 'contains', enabled: true, type: 'all' });
+  });
+
+  const idsInOrder = async () =>
+    await page.$$eval('[data-testid="flow-row"]', (rows) => rows.map((r) => (r as HTMLElement).getAttribute('data-flow-id')));
+
+  // 首次点击（asc）：已编辑在前（b），未编辑在后（a, c）
+  await page.evaluate(() => (window as any).__pbStore.getState().cycleSort('edited'));
+  await expect.poll(async () => (await idsInOrder())[0]).toBe('f-sort-b');
+
+  // 再点一次 → 降序：未编辑在前（c, a），已编辑在后（b）
+  await page.evaluate(() => (window as any).__pbStore.getState().cycleSort('edited'));
+  await expect.poll(idsInOrder).toEqual(['f-sort-c', 'f-sort-a', 'f-sort-b']);
+
+  // 再点一次 → 恢复无排序
+  await page.evaluate(() => (window as any).__pbStore.getState().cycleSort('edited'));
+  await expect.poll(idsInOrder).toEqual(['f-sort-a', 'f-sort-b', 'f-sort-c']);
+
+  // 备注升序：空备注视为最小 → a在前，然后 alpha(b)、zeta(c)
+  await page.evaluate(() => (window as any).__pbStore.getState().cycleSort('note'));
+  await expect.poll(idsInOrder).toEqual(['f-sort-a', 'f-sort-b', 'f-sort-c']);
+
+  // 再点一次 → 降序：zeta、alpha、空
+  await page.evaluate(() => (window as any).__pbStore.getState().cycleSort('note'));
+  await expect.poll(idsInOrder).toEqual(['f-sort-c', 'f-sort-b', 'f-sort-a']);
+
+  // 清理：取消排序 + 清 filter
+  await page.evaluate(() => (window as any).__pbStore.getState().cycleSort('note'));
+  await page.evaluate(() => {
+    const store = (window as any).__pbStore;
+    store.getState().setFilter({ ...store.getState().filter, text: '', enabled: false });
+  });
+});
+
+test('抓包列表「客户端」列 hover：显示进程信息 tooltip（PID / bundleId / 路径）', async () => {
+  // 保证在抓包页
+  await page.getByRole('button', { name: '抓包' }).click();
+  await injectFlow(
+    {
+      id: 'f-app-info',
+      status: 'completed',
+      isTLS: true,
+      sseFrames: [],
+      app: {
+        name: 'SiriSuggestionsBookkeepingService',
+        pid: 12345,
+        bundleId: 'com.apple.SiriSuggestionsBookkeepingService',
+        execPath: '/System/Library/PrivateFrameworks/SiriSuggestionsSupport.framework/Versions/A/XPCServices/SiriSuggestionsBookkeepingService.xpc/Contents/MacOS/SiriSuggestionsBookkeepingService',
+        bundlePath: '/System/Library/PrivateFrameworks/SiriSuggestionsSupport.framework/Versions/A/XPCServices/SiriSuggestionsBookkeepingService.xpc',
+      },
+      request: {
+        method: 'GET',
+        url: 'https://apple.com/siri',
+        host: 'apple.com',
+        path: '/siri',
+        scheme: 'https',
+        httpVersion: '1.1',
+        headers: [],
+        bodySize: 0,
+        startedAt: Date.now(),
+        contentType: '',
+      },
+    },
+    [
+      { event: 'flow:response-headers', payload: { id: 'f-app-info', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: false, contentType: 'text/plain' } } },
+      { event: 'flow:end', payload: { id: 'f-app-info', durationMs: 1, status: 'completed' } },
+    ],
+  );
+
+  const row = page.locator('[data-testid="flow-row"][data-flow-id="f-app-info"]');
+  await expect(row).toBeVisible();
+
+  // hover 客户端列的锚点 → 弹 tooltip
+  const anchor = row.getByTestId('app-info-anchor').first();
+  await expect(anchor).toBeVisible();
+  await anchor.hover();
+
+  const tooltip = page.getByTestId('app-info-tooltip').first();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText('SiriSuggestionsBookkeepingService');
+  await expect(tooltip).toContainText('com.apple.SiriSuggestionsBookkeepingService');
+  await expect(tooltip).toContainText('12345');
+  await expect(tooltip).toContainText('SiriSuggestionsBookkeepingService.xpc');
+
+  // 鼠标移出 → 释放 tooltip 状态，避免影响后续测试
+  await page.mouse.move(0, 0);
 });
 
 test('AI 美化：注入 OpenAI 流式响应，OpenAI Tab 呈现 chat 气泡', async () => {
@@ -164,29 +390,7 @@ function aiFlow(opts: {
   startedAt: number;
   model?: string;
 }) {
-  const headers: { name: string; value: string }[] = [];
-  if (opts.sessionId) headers.push({ name: 'X-Conversation-Id', value: opts.sessionId });
-  if (opts.rootRequestId) headers.push({ name: 'X-Root-Request-Id', value: opts.rootRequestId });
-  return {
-    id: opts.id,
-    status: 'completed' as const,
-    isTLS: true,
-    sseFrames: [],
-    app: { name: 'cbc', pid: 999 },
-    request: {
-      method: 'POST',
-      url: 'https://api.openai.com/v1/chat/completions',
-      host: 'api.openai.com',
-      path: '/v1/chat/completions',
-      scheme: 'https' as const,
-      httpVersion: '1.1',
-      headers,
-      bodySize: 0,
-      startedAt: opts.startedAt,
-      contentType: 'application/json',
-      bodyText: JSON.stringify({ model: opts.model || 'gpt-4o', messages: [{ role: 'user', content: 'q' }] }),
-    },
-  };
+  return _aiFlow(opts);
 }
 
 test('AI Sessions 窗口：Toolbar 按钮打开，展示 Session/Turn/Request 三级树', async () => {
@@ -414,26 +618,7 @@ test('侧栏：按域名/应用分组，点击过滤列表', async () => {
   await expect(page.locator('[data-testid="flow-row"][data-flow-id="f-http"]')).toBeVisible();
 });
 
-test('规则页：新建规则集并编辑保存', async () => {
-  await page.getByRole('button', { name: '规则', exact: true }).click();
-  await expect(page.getByText('规则集', { exact: true })).toBeVisible();
-  await page.locator('button[title="新建"]').click();
-  // Monaco 编辑器出现
-  const editor = page.locator('.monaco-editor').first();
-  await expect(editor).toBeVisible();
-  await editor.locator('.view-lines').click();
-  await page.keyboard.type('api.demo.com/users  mock://{"e2e":true}');
-  // 让 dirty 变 true：改一下 draftName input（同时保存按钮启用）
-  // Save 按钮 title 前缀是 "保存"，用 startsWith
-  await page.locator('button[title^="保存"]').click();
-  await expect(page.getByText('新规则集').first()).toBeVisible();
-});
-
-test('插件列表可见并可切换', async () => {
-  await page.getByRole('button', { name: '规则', exact: true }).click();
-  await expect(page.getByText('Whistle Rules').first()).toBeVisible();
-  await expect(page.getByText('Breakpoint').first()).toBeVisible();
-});
+// 规则页基础/插件列表 已拆到 tests/e2e/rules.e2e.ts
 
 test('flow:app-info 事件可后补 app 元数据', async () => {
   await page.getByRole('button', { name: '抓包' }).click();
@@ -509,22 +694,7 @@ test('监听地址气泡：打开并可切换系统代理', async () => {
   await page.keyboard.press('Escape');
 });
 
-test('规则页：示例点击插入编辑器', async () => {
-  await page.getByRole('button', { name: '规则', exact: true }).click();
-  // 如果没有规则集，就新建一个
-  const hasSet = await page.getByText('新规则集').first().isVisible().catch(() => false);
-  if (!hasSet) {
-    await page.locator('button[title="新建"]').click();
-  }
-  // 选中已有规则集
-  await page.getByText('新规则集').first().click();
-  // 帮助面板示例可见
-  await expect(page.getByText('示例（点击插入）')).toBeVisible();
-  // 点击一个示例
-  await page.getByText('Mock JSON 响应').click();
-  // Monaco 编辑器里出现 mock:// —— 检查 .view-line 里的文本
-  await expect(page.locator('.monaco-editor .view-line').getByText(/mock:\/\//).first()).toBeVisible();
-});
+// 规则页示例点击 已拆到 tests/e2e/rules.e2e.ts
 
 test('界面切换顺畅：抓包<->规则 多次切换无报错', async () => {
   await ensureBaseFlows();
@@ -539,71 +709,34 @@ test('界面切换顺畅：抓包<->规则 多次切换无报错', async () => {
   expect(errors).toHaveLength(0);
 });
 
+test('顶部tab 切换保留各页 UI state（组件不卸载）', async () => {
+  // 1) 进规则页，切到"脚本（Scripts）"子 tab —— 这是 RulesView 的本地 useState
+  await page.getByRole('button', { name: '规则', exact: true }).click();
+  await expect(page.getByTestId('rules-mode-tabs')).toBeVisible();
+  await page.getByTestId('rules-tab-scripts').click();
+  await expect(page.getByTestId('rules-tab-scripts')).toHaveAttribute('data-active', 'true');
+
+  // 2) 切到抓包页，再切到编写页，再切回规则页
+  await page.getByRole('button', { name: '抓包' }).click();
+  await expect(page.locator('[data-testid="flow-row"]').first()).toBeVisible().catch(() => {});
+  await page.getByRole('button', { name: '编写', exact: true }).click();
+  await page.getByRole('button', { name: '规则', exact: true }).click();
+
+  // 3) 规则页应仍停留在 scripts 子 tab（若组件被卸载则会回到默认 rules）
+  await expect(page.getByTestId('rules-tab-scripts')).toHaveAttribute('data-active', 'true');
+
+  // 恢复默认，避免污染后续用例
+  await page.getByTestId('rules-tab-rules').click();
+});
+
 // ============ 过滤/搜索/侧栏 完整覆盖 ============
 async function resetFilters() {
-  await page.getByRole('button', { name: '抓包' }).click();
-  await ensureBaseFlows();
-  // 通过桥直接把 filter 全部重置（比逐个 UI 点击更稳）
-  await page.evaluate(() => {
-    const anyWin = window as any;
-    if (anyWin.__pbStore?.getState) {
-      anyWin.__pbStore.getState().resetFilter();
-      anyWin.__pbStore.setState({ selectedIds: {}, selectedId: null, pinnedHosts: {}, pinnedPaths: {}, pinnedIds: {} });
-    }
-    try { localStorage.removeItem('proxybaby:pinned-hosts'); } catch {}
-    try { localStorage.removeItem('proxybaby:pinned-paths'); } catch {}
-  });
-  const bar = page.getByTestId('searchbar-input');
-  if (!(await bar.isVisible().catch(() => false))) {
-    // 底部搜索输入已下沉到 StatusBar 常驻；高级 SearchBar 弹层通过 store 桥打开更稳定（避免依赖 ⌘F 被系统菜单拦截）。
-    await page.evaluate(() => (window as any).__pbStore?.getState().setSearchOpen(true));
-  }
-  await page.getByTestId('searchbar-input').fill('');
+  await _resetFilters(page);
 }
 
-/**
- * 保证测试所需的三个 flow 已经在 store 中；重复调用是幂等的：主进程 store 是 Set 语义。
- * 有些测试可能因前一个 test 出错而丢失 fixture，这里做兜底。
- */
+/** 兜底注入 base flows（delegates to _shared） */
 async function ensureBaseFlows() {
-  // 用 store 里的 flows 计数判定，而不是 DOM（DOM 会被过滤影响）
-  const flowsPresent = await page.evaluate(() => {
-    const s = (window as any).__pbStore?.getState?.();
-    if (!s) return 0;
-    return s.flows.filter((f: any) => f.id === 'f-http').length;
-  });
-  if (flowsPresent > 0) return;
-  await injectFlow(
-    {
-      id: 'f-http', status: 'pending', isTLS: true, sseFrames: [],
-      app: { name: 'node', pid: 1 },
-      request: { method: 'POST', url: 'https://api.demo.com/users', host: 'api.demo.com', path: '/users', scheme: 'https', httpVersion: '1.1', headers: [{ name: 'Accept', value: 'application/json' }], bodySize: 0, startedAt: Date.now(), contentType: 'application/json', bodyText: '{"name":"alice"}' },
-    },
-    [
-      { event: 'flow:response-headers', payload: { id: 'f-http', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [{ name: 'Content-Type', value: 'application/json' }], bodySize: 0, isSSE: false, contentType: 'application/json' } } },
-      { event: 'flow:response-body', payload: { id: 'f-http', bodyText: '{"id":1,"name":"alice"}', bodySize: 22 } },
-      { event: 'flow:end', payload: { id: 'f-http', durationMs: 33, status: 'completed' } },
-    ],
-  );
-  await injectFlow(
-    {
-      id: 'f-ai', status: 'streaming', isTLS: true, sseFrames: [],
-      app: { name: 'node', pid: 2 },
-      request: { method: 'POST', url: 'https://api.openai.com/v1/chat/completions', host: 'api.openai.com', path: '/v1/chat/completions', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: Date.now(), contentType: 'application/json', bodyText: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: '你好' }] }) },
-    },
-    [
-      { event: 'flow:response-headers', payload: { id: 'f-ai', response: { status: 200, statusText: 'OK', httpVersion: '1.1', headers: [], bodySize: 0, isSSE: true, contentType: 'text/event-stream' } } },
-      { event: 'flow:end', payload: { id: 'f-ai', durationMs: 120, status: 'completed' } },
-    ],
-  );
-  await injectFlow(
-    {
-      id: 'f-ws', status: 'streaming', isTLS: true, isWebSocket: true, sseFrames: [], wsMessages: [],
-      app: { name: 'Chrome', pid: 3 },
-      request: { method: 'GET', url: 'wss://echo.demo.com/ws', host: 'echo.demo.com', path: '/ws', scheme: 'https', httpVersion: '1.1', headers: [], bodySize: 0, startedAt: Date.now() },
-    },
-    [],
-  );
+  await _ensureBaseFlows(page);
 }
 
 test('文本搜索：按 URL 过滤列表', async () => {
@@ -691,6 +824,96 @@ test('方向键在输入框内不切换选中', async () => {
 });
 
 
+test('新抓包插入到列表顶部时，不抖动当前 viewport（scrollTop 补偿）', async () => {
+  await resetFilters();
+  // 清空所有已注入的 flow，保证列表初始状态干净、可预期
+  await page.evaluate(() => (window as any).__pbStore.getState().clear());
+  // 确认默认排序仍是 index desc（最新在上），这是产生"抖动"的前提场景
+  await page.evaluate(() => {
+    (window as any).__pbStore.setState({ sort: { key: 'index', dir: 'desc' } });
+  });
+
+  // 灌 60 条 flow，使列表足够长可以滚动
+  await page.evaluate(async () => {
+    const e = (window as any).__pbE2E;
+    for (let i = 0; i < 60; i++) {
+      await e.emit('flow:start', {
+        id: `scroll-${i}`,
+        status: 'completed',
+        isTLS: false,
+        sseFrames: [],
+        request: {
+          method: 'GET',
+          url: `https://example.com/api/${i}`,
+          host: 'example.com',
+          path: `/api/${i}`,
+          scheme: 'https',
+          httpVersion: '1.1',
+          headers: [],
+          bodySize: 0,
+          startedAt: Date.now() - (60 - i) * 1000,
+        },
+      });
+      await e.emit('flow:end', { id: `scroll-${i}`, durationMs: 10, status: 'completed' });
+    }
+  });
+
+  await expect(page.locator('[data-testid="flow-row"]').first()).toBeVisible();
+
+  // 滚到列表中间（不是顶部），使补偿逻辑生效
+  const scrollerSel = '[data-testid="flow-list-scroller"]';
+  await page.evaluate((sel) => {
+    const el = document.querySelector(sel) as HTMLDivElement;
+    el.scrollTop = 400;
+  }, scrollerSel);
+  const before = await page.evaluate((sel) => {
+    const el = document.querySelector(sel) as HTMLDivElement;
+    return el.scrollTop;
+  }, scrollerSel);
+  expect(before).toBeGreaterThan(0);
+
+  // 灌入一条新 flow，它会插入到 desc 列表顶部
+  await page.evaluate(async () => {
+    const e = (window as any).__pbE2E;
+    await e.emit('flow:start', {
+      id: 'scroll-new',
+      status: 'completed',
+      isTLS: false,
+      sseFrames: [],
+      request: {
+        method: 'GET',
+        url: 'https://example.com/api/new',
+        host: 'example.com',
+        path: '/api/new',
+        scheme: 'https',
+        httpVersion: '1.1',
+        headers: [],
+        bodySize: 0,
+        startedAt: Date.now(),
+      },
+    });
+    await e.emit('flow:end', { id: 'scroll-new', durationMs: 10, status: 'completed' });
+  });
+
+  await page.waitForFunction(() => {
+    const s = (window as any).__pbStore.getState();
+    return s.flows.some((f: any) => f.id === 'scroll-new');
+  });
+
+  // 核心断言：新行插到顶部后，scrollTop 应补偿一行高度（26px），
+  // 保证锚点行仍停在原视口位置，视觉上无抖动。
+  const after = await page.evaluate((sel) => {
+    const el = document.querySelector(sel) as HTMLDivElement;
+    return el.scrollTop;
+  }, scrollerSel);
+  expect(after).toBe(before + 26);
+
+  // 清理：本用例注入了大量 scroll-* flow，避免污染后续用例的过滤/计数断言。
+  // resetFilters() 内 ensureBaseFlows() 会在下一 test 重新灌入 f-http/f-ai/f-ws。
+  await page.evaluate(() => (window as any).__pbStore.getState().clear());
+});
+
+
 test('类型过滤条：HTTPS/全部', async () => {
   await resetFilters();
   await page.getByRole('button', { name: 'HTTPS', exact: true }).click();
@@ -746,6 +969,18 @@ test('侧栏右键：将域名加入抓包包含列表（record-filter include�
   const cfg = await page.evaluate(async () => await (window as any).proxybaby.recordFilterGet());
   expect(cfg.mode).toBe('include');
   expect(cfg.entries.some((e: any) => e.kind === 'host' && e.value === 'api.demo.com')).toBe(true);
+});
+
+test('侧栏右键：应用程序 item 打开菜单（回归 asChild 不透传 ref）', async () => {
+  // 曾出现 Item 未 forwardRef → Radix ContextMenu asChild 拿不到 dom → 右键无反应。
+  await resetFilters();
+  const appRow = page.locator('[data-testid="app-row"]').first();
+  await expect(appRow).toBeVisible();
+  await appRow.click({ button: 'right' });
+  // 菜单里的"复制应用名"是 AppContextMenu 独有的稳定项
+  await expect(page.getByText(/^复制应用名$/)).toBeVisible();
+  // 关掉菜单
+  await page.keyboard.press('Escape');
 });
 
 test('底部状态栏：record-filter 生效时显示常驻 tip', async () => {
@@ -906,81 +1141,7 @@ test('侧栏右键：已置顶树下的 host 右键"取消置顶"，一次性清
   expect(Object.keys(state.paths).some((p) => p.startsWith('api.demo.com/'))).toBe(false);
 });
 
-test('侧栏右键：规则 → 禁止访问，生成临时规则；再点即删除（toggle）', async () => {
-  await resetFilters();
-  // 清空临时规则
-  await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
-  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
-  await hostRow.click({ button: 'right' });
-  await page.locator('[data-testid="quick-rule-trigger"]').click();
-  await page.locator('[data-testid="quick-rule-abort"]').click();
-  const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
-  const temps = list.filter((s: any) => s.temporary);
-  expect(temps.length).toBeGreaterThanOrEqual(1);
-  expect(temps.some((s: any) => s.text.includes('api.demo.com') && s.text.includes('abort'))).toBe(true);
-  // 再次右键 → 规则 → 该 preset 应显示 active，再点即删除
-  await hostRow.click({ button: 'right' });
-  await page.locator('[data-testid="quick-rule-trigger"]').click();
-  const abortItem = page.locator('[data-testid="quick-rule-abort"]');
-  await expect(abortItem).toHaveAttribute('data-active', 'true');
-  await abortItem.click({ force: true });
-  const list2 = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
-  expect(list2.filter((s: any) => s.temporary && s.text.includes('api.demo.com') && s.text.includes('abort')).length).toBe(0);
-});
-
-test('侧栏右键：自定义规则 → 跳规则页 + 临时 sub-tab 出现，编辑器聚焦', async () => {
-  await resetFilters();
-  await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
-  const hostRow = page.locator('[data-testid="host-row"][data-host="api.demo.com"]');
-  await hostRow.click({ button: 'right' });
-  await page.locator('[data-testid="quick-rule-trigger"]').click();
-  await page.locator('[data-testid="quick-rule-custom"]').click();
-  // 应切到规则页
-  await expect(page.locator('[data-testid="rules-mode-tabs"]')).toBeVisible();
-  // 临时 sub-tab 出现
-  await expect(page.locator('[data-testid="rules-subtab-temporary"]')).toBeVisible();
-  const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
-  const custom = list.find((s: any) => s.temporary && s.name === '[临时] 自定义');
-  expect(custom).toBeTruthy();
-  expect(custom.text.includes('api.demo.com')).toBe(true);
-});
-
-test('抓包列表右键：规则 → 禁止访问，pattern 为 host+path 且可 toggle 删除', async () => {
-  await page.getByRole('button', { name: '抓包' }).click();
-  await resetFilters();
-  await ensureBaseFlows();
-  await page.evaluate(async () => await (window as any).proxybaby.rulesClearTemp());
-  const row = page.locator('[data-testid="flow-row"][data-flow-id="f-http"]');
-  await row.click({ button: 'right' });
-  await page.locator('[data-testid="quick-rule-trigger"]').click();
-  await page.locator('[data-testid="quick-rule-abort"]').click();
-  const list = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
-  const hit = list.filter((s: any) => s.temporary && s.text.includes('api.demo.com/users') && s.text.includes('abort'));
-  expect(hit.length).toBeGreaterThanOrEqual(1);
-  // 再次右键 → ✓ → 再点即删除
-  await row.click({ button: 'right' });
-  await page.locator('[data-testid="quick-rule-trigger"]').click();
-  const abortItem = page.locator('[data-testid="quick-rule-abort"]');
-  await expect(abortItem).toHaveAttribute('data-active', 'true');
-  await abortItem.click({ force: true });
-  const list2 = await page.evaluate(async () => await (window as any).proxybaby.rulesList());
-  expect(list2.filter((s: any) => s.temporary && s.text.includes('api.demo.com/users') && s.text.includes('abort')).length).toBe(0);
-});
-
-test('规则页临时 sub-tab: 清空按钮工作', async () => {
-  // 先保证有临时规则
-  await page.evaluate(async () => {
-    await (window as any).proxybaby.rulesQuickAdd({ pattern: 'demo.com', operator: 'abort', value: '' });
-  });
-  await page.getByRole('button', { name: '规则', exact: true }).click();
-  await expect(page.locator('[data-testid="rules-subtab-temporary"]')).toBeVisible();
-  await page.locator('[data-testid="rules-subtab-temporary"]').click();
-  // 点清空（会弹 confirm，playwright 需要 accept 一次）
-  page.once('dialog', (d) => d.accept());
-  await page.locator('[data-testid="rules-clear-temp"]').click();
-  // 临时 tab 应消失
-  await expect(page.locator('[data-testid="rules-subtab-temporary"]')).toHaveCount(0, { timeout: 3000 });
-});
+// 规则相关：侧栏/抓包列表右键 → 快速规则、临时 sub-tab 已拆到 tests/e2e/rules.e2e.ts
 
 test('侧栏选中项 hover 时保持蓝色底（不被 hover 灰色覆盖）', async () => {
   await resetFilters();
@@ -1104,45 +1265,15 @@ test('高级过滤器：多条件 AND + 保存/加载预设', async () => {
 // 设置改为独立子窗口，测试里点开 → 在新窗口里完成所有子面板校验
 
 async function openSettingsWindow() {
-  const before = app.windows().length;
-  await page.getByTestId('open-settings').click();
-  const t0 = Date.now();
-  while (app.windows().length <= before && Date.now() - t0 < 10000) {
-    await page.waitForTimeout(100);
-  }
-  const win = app.windows().find((w) => w !== page && w.url().includes('#settings'));
-  if (!win) throw new Error('settings 子窗口没有开出来');
-  await win.waitForLoadState('domcontentloaded');
-  return win;
+  return _openSettingsWindow(app, page);
 }
 
 async function openFilterConfigWindow() {
-  const before = app.windows().length;
-  await page.getByTestId('open-filter-config').click();
-  const t0 = Date.now();
-  while (app.windows().length <= before && Date.now() - t0 < 10000) {
-    await page.waitForTimeout(100);
-  }
-  const win = app.windows().find(
-    (w) => w !== page && w.url().includes('filter-config') && !w.url().includes('filter-entry-editor'),
-  );
-  if (!win) throw new Error('filter-config 子窗口没有开出来');
-  await win.waitForLoadState('domcontentloaded');
-  return win;
+  return _openFilterConfigWindow(app, page);
 }
 
 async function waitForEntryEditorWindow() {
-  const t0 = Date.now();
-  let win: any = null;
-  while (Date.now() - t0 < 10000) {
-    win = app.windows().find((w) => w.url().includes('filter-entry-editor'));
-    if (win) break;
-    await page.waitForTimeout(50);
-  }
-  if (!win) throw new Error('filter-entry-editor 子窗口没有开出来');
-  await win.waitForLoadState('domcontentloaded');
-  await win.getByTestId('filter-entry-editor').waitFor({ state: 'visible' });
-  return win;
+  return _waitForEntryEditorWindow(app, page);
 }
 
 test('过滤配置窗口：Allow/Block 添加 host 条目（编辑器为独立窗口）', async () => {
@@ -1169,24 +1300,6 @@ test('过滤配置窗口：录制过滤添加 App 维度条目', async () => {
   await editor.getByTestId('fee-save').click();
   await expect(w.getByTestId('record-filter-panel')).toContainText('Google Chrome');
   await w.getByTestId('close-self').click();
-});
-
-test('规则页：脚本子标签中创建脚本 → 编辑并保存 → 勾选全局', async () => {
-  // 切到主界面「规则」页
-  await page.getByRole('button', { name: '规则', exact: true }).click();
-  // 切到「脚本（Scripts）」子标签
-  await page.getByTestId('rules-tab-scripts').click();
-  await expect(page.getByTestId('scripts-panel')).toBeVisible();
-  await page.getByTestId('script-add').click();
-  await page.getByTestId('script-name').fill('e2e-script');
-  // Monaco 里输入代码：点击 view-lines 激活后键入
-  await page.locator('.monaco-editor .view-lines').first().click();
-  await page.keyboard.type('module.exports = { onRequest(pb){ pb.setReqHeader("X-E2E", "1"); } }');
-  await page.getByTestId('script-save').click();
-  await page.getByTestId('script-always').check();
-  // 切回抓包页免影响后续测试
-  await page.getByTestId('rules-tab-rules').click();
-  await page.getByRole('button', { name: '抓包', exact: true }).click();
 });
 
 test('设置窗口：网络条件切换 3G', async () => {
@@ -1216,11 +1329,39 @@ test('Composer：填表并生成代码', async () => {
   await expect(page.getByTestId('composer-view')).toBeVisible();
   await page.getByTestId('composer-method').selectOption('POST');
   await page.getByTestId('composer-url').fill('https://api.example.com/x');
-  await page.getByTestId('composer-headers').fill('Accept: application/json');
-  await page.getByTestId('composer-body').fill('{"hello":"world"}');
+  // Composer 的 headers/body 用了 Monaco，textarea.fill() 不生效；直接通过 model.setValue 灌入
+  await page.evaluate(() => {
+    const mo = (window as any).monaco;
+    const models: any[] = mo.editor.getModels();
+    //匹配 http-headers 语言的model作为headers 编辑器
+    const h = models.find((mm) => mm.getLanguageId?.() === 'http-headers');
+    if (h) h.setValue('Accept: application/json');
+    // body 编辑器：找剩余里 plaintext/json 的
+    const bodyCandidates = models.filter((mm) => mm.getLanguageId?.() !== 'http-headers');
+    // Composer body 默认没内容，找 value 为空的
+    const b = bodyCandidates.find((mm) => mm.getValue() === '') || bodyCandidates[0];
+    if (b) b.setValue('{"hello":"world"}');
+  });
   await page.getByTestId('composer-toggle-code').click();
   await page.getByTestId('composer-lang-python').click();
   await expect(page.getByTestId('composer-code')).toContainText('requests.post');
+});
+
+test('Composer：HeadersEditor 补全 -输入 Cont 提示 Content-Type', async () => {
+  await page.getByRole('button', { name: '编写', exact: true }).click();
+  await expect(page.getByTestId('composer-view')).toBeVisible();
+  // 清空 headers editor
+  await page.evaluate(() => {
+    const mo = (window as any).monaco;
+    const h = mo.editor.getModels().find((mm: any) => mm.getLanguageId?.() === 'http-headers');
+    if (h) h.setValue('');
+  });
+  // 点击 headers 编辑器区域激活光标
+  await page.locator('[data-testid="composer-headers"] .monaco-editor .view-lines').click();
+  await page.keyboard.type('Cont');
+  // suggest widget 应包含 Content-Type
+  await expect(page.locator('.monaco-editor .suggest-widget').getByText('Content-Type', { exact: true }).first())
+    .toBeVisible({ timeout: 3000 });
 });
 
 // ============ Diff（右键菜单入口） ============
@@ -1420,4 +1561,150 @@ test('快捷键 ⌥⌘O 切换系统代理；⌥⌘R 切换抓包录制', async 
   await expect
     .poll(() => page.evaluate(() => (window as any).__pbStore.getState().proxyStatus.recording))
     .toBe(beforeRec);
+});
+
+
+// ---------- 日志系统& 应用菜单 ----------
+
+test('应用菜单：中文顶级菜单项齐全（文件/编辑/视图/抓包/规则/调试/窗口/帮助）', async () => {
+  const labels = await app.evaluate(async ({ Menu }) => {
+    const m = Menu.getApplicationMenu();
+    if (!m) return [];
+    return m.items.map((it: any) => it.label);
+  });
+  for (const expected of ['文件', '编辑', '视图', '抓包', '规则', '调试', '窗口', '帮助']) {
+    expect(labels).toContain(expected);
+  }
+});
+
+test('调试菜单：包含"打开日志目录 / 清空所有日志"等项', async () => {
+  const debugItems = await app.evaluate(async ({ Menu }) => {
+    const m = Menu.getApplicationMenu();
+    if (!m) return [];
+    const debugMenu = m.items.find((it: any) => it.label === '调试');
+    if (!debugMenu || !debugMenu.submenu) return [];
+    return debugMenu.submenu.items.map((it: any) => it.label);
+  });
+  expect(debugItems).toEqual(expect.arrayContaining(['打开日志目录', '显示当前日志文件', '清空所有日志…', '复制诊断信息']));
+});
+
+test('IPC app:open-logs-folder / app:clear-logs 有效', async () => {
+  // 直接在主进程验证 handler 逻辑 —— 通过 ipcMain.emit 触发注册的 handler
+  const opened = await app.evaluate(async ({ ipcMain, shell }) => {
+    // 探测 handler 是否已注册（通过 ipcMain._invokeHandlers 私有 map）
+    const map = (ipcMain as any)._invokeHandlers as Map<string, Function>;
+    const openLogs = map.get('app:open-logs-folder');
+    const clearLogs = map.get('app:clear-logs');
+    if (!openLogs || !clearLogs) return { ok: false, reason: 'handlers not registered' };
+    // stub 掉 shell.openPath 避免测试机真的打开 Finder
+    (shell as any).openPath = async () => '';
+    const openRes = await openLogs({});
+    const clearRes = await clearLogs({});
+    return { openRes, clearRes };
+  });
+  expect((opened as any).openRes).toMatchObject({ ok: true });
+  expect((opened as any).clearRes).toMatchObject({ ok: true });
+});
+
+test('监听气泡：一键复制 shell 环境变量', async () => {
+  // 先清空剪贴板，避免其它用例污染
+  await app.evaluate(async ({ clipboard }) => clipboard.writeText(''));
+
+  // 顶部工具栏那颗 "ProxyBaby | 正在监听 ..." 按钮
+  await page.getByText(/ProxyBaby \|/).first().click();
+
+  const copyBtn = page.getByTestId('copy-shell-env');
+  await expect(copyBtn).toBeVisible();
+  await copyBtn.click();
+
+  // 反馈变成"已复制"
+  await expect(copyBtn).toContainText('已复制');
+
+  const text = await app.evaluate(async ({ clipboard }) => clipboard.readText());
+  // 三行export，且用回环地址（不是 status.host）
+  expect(text).toMatch(/^export http_proxy=http:\/\/127\.0\.0\.1:\d+$/m);
+  expect(text).toMatch(/^export https_proxy=http:\/\/127\.0\.0\.1:\d+$/m);
+  expect(text).toMatch(/^export all_proxy=http:\/\/127\.0\.0\.1:\d+$/m);
+
+  // 收起弹层，避免影响后续用例
+  await page.keyboard.press('Escape');
+  await page.mouse.click(10, 10);
+});
+
+test('监听气泡：回环地址可编辑并被复制命令采用', async () => {
+  await app.evaluate(async ({ clipboard }) => clipboard.writeText(''));
+
+  await page.getByText(/ProxyBaby \|/).first().click();
+
+  // 进入回环编辑
+  await page.getByTestId('copy-host-edit').click();
+  const input = page.getByTestId('copy-host-input');
+  await expect(input).toBeVisible();
+  await input.fill('192.168.1.100');
+  await input.press('Enter');
+
+  // 展示值应更新
+  await expect(page.getByTestId('copy-host-value')).toHaveText('192.168.1.100');
+
+  // 点复制，剪贴板里应是新的 host
+  await page.getByTestId('copy-shell-env').click();
+  const text = await app.evaluate(async ({ clipboard }) => clipboard.readText());
+  expect(text).toMatch(/^export http_proxy=http:\/\/192\.168\.1\.100:\d+$/m);
+  expect(text).toMatch(/^export https_proxy=http:\/\/192\.168\.1\.100:\d+$/m);
+  expect(text).toMatch(/^export all_proxy=http:\/\/192\.168\.1\.100:\d+$/m);
+
+  // 还原成 127.0.0.1，避免影响后续用例（如果加了别的用例）
+  await page.getByTestId('copy-host-edit').click();
+  await page.getByTestId('copy-host-input').fill('127.0.0.1');
+  await page.getByTestId('copy-host-input').press('Enter');
+
+  await page.keyboard.press('Escape');
+  await page.mouse.click(10, 10);
+});
+
+// ============ 更新提示（Updater）============
+
+test('更新提示：通过 IPC 弹出独立窗口并渲染 changelog', async () => {
+  const before = app.windows().length;
+  await page.evaluate(async () => {
+    await (window as any).proxybaby.openWindow('updater', { title: '更新' });
+  });
+  const t0 = Date.now();
+  while (app.windows().length <= before && Date.now() - t0 < 10000) {
+    await page.waitForTimeout(100);
+  }
+  const win = app.windows().find((w) => w !== page && w.url().includes('#updater'));
+  if (!win) throw new Error('updater 窗口未打开');
+  await win.waitForLoadState('domcontentloaded');
+  await win.waitForFunction(() => !!(window as any).__pbE2E && !!(window as any).proxybaby);
+
+  // 注入 update info 事件（走 __e2e:emit → broadcast 'updater:info'）
+  await win.evaluate(async () => {
+    await (window as any).__pbE2E.emit('updater:info', {
+      currentVersion: '0.7.0',
+      latestVersion: '9.9.9',
+      hasUpdate: true,
+      isSkipped: false,
+      releaseName: 'Release 9.9.9',
+      releaseNotes: '## 更新内容\n\n- 全新更新提示能力\n- 修复若干问题',
+      htmlUrl: 'https://github.com/imcuttle/proxybaby/releases/tag/v9.9.9',
+      publishedAt: '2026-01-01T00:00:00Z',
+      checkedAt: Date.now(),
+    });
+  });
+
+  await expect(win.getByTestId('updater-view')).toBeVisible();
+  await expect(win.getByTestId('updater-title')).toContainText('9.9.9');
+  await expect(win.getByTestId('updater-notes')).toContainText('全新更新提示能力');
+  await expect(win.getByTestId('updater-skip')).toBeVisible();
+  await expect(win.getByTestId('updater-later')).toBeVisible();
+  await expect(win.getByTestId('updater-open-release')).toBeVisible();
+
+  // 点"稍后提醒"应关闭窗口
+  await win.getByTestId('updater-later').click();
+  const t1 = Date.now();
+  while (app.windows().some((w) => w.url().includes('#updater')) && Date.now() - t1 < 5000) {
+    await page.waitForTimeout(100);
+  }
+  expect(app.windows().some((w) => w.url().includes('#updater'))).toBe(false);
 });

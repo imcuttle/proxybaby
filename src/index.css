@@ -28,10 +28,10 @@
   }
 
   .method-badge {
-    @apply inline-flex items-center justify-center min-w-[46px] px-1.5 rounded text-xs font-mono;
+    @apply inline-flex items-center justify-start px-1.5 rounded text-xs font-mono;
   }
   .status-badge {
-    @apply inline-flex items-center justify-center min-w-[38px] px-1.5 rounded text-xs font-mono;
+    @apply inline-flex items-center justify-start px-1.5 rounded text-xs font-mono;
   }
 
   /* Markdown 渲染样式（用于插件文档等） */

@@ -1,12 +1,14 @@
-import { useMemo, useRef, useCallback, useEffect } from 'react';
+import { useMemo, useRef, useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Lock, LockOpen, Pin, Bookmark, MoreHorizontal, Pencil, ArrowUp, ArrowDown } from 'lucide-react';
+import { Lock, LockOpen, Pin, Bookmark, ArrowUp, ArrowDown } from 'lucide-react';
 import { useFlowStore, type SortKey, type SortState } from '../store/flows';
 import { matchFilter, methodColor, statusColor, isFlowActive, isFlowPinned } from '../lib/filter';
 import { formatSize, formatTime, formatDuration } from '../lib/format';
 import { cn } from '../lib/cn';
 import type { Flow } from '../../shared/types';
 import { FlowContextMenu } from './FlowContextMenu';
+import { AppInfoTooltip } from './AppInfoTooltip';
 
 interface Column { key: string; label: string; width?: number; flex?: boolean; sortKey?: SortKey; resizable?: boolean; resizeFromLeft?: boolean }
 const COLUMNS: Column[] = [
@@ -21,8 +23,8 @@ const COLUMNS: Column[] = [
   { key: 'reqSize', label: '请求', width: 60, sortKey: 'reqSize', resizable: true },
   { key: 'respSize', label: '响应', width: 60, sortKey: 'respSize', resizable: true },
   { key: 'ssl', label: 'SSL', width: 34, resizable: true },
-  { key: 'edited', label: '已编辑', width: 52, resizable: true },
-  { key: 'tools', label: '工具', width: 40 },
+  { key: 'edited', label: '已编辑', width: 52, sortKey: 'edited', resizable: true },
+  { key: 'note', label: '备注', width: 60, sortKey: 'note', resizable: true },
 ];
 
 // 表头与数据行共用同一列宽定义，保证对齐
@@ -32,7 +34,11 @@ function colStyle(c: Column, override?: number): React.CSSProperties {
   return { width: w, flexShrink: 0 };
 }
 
-function compareFlows(a: Flow, b: Flow, key: SortKey): number {
+function isFlowEdited(f: Flow): boolean {
+  return !!f.edited || (f.matchedRules?.length ?? 0) > 0;
+}
+
+function compareFlows(a: Flow, b: Flow, key: SortKey, noteById: Record<string, string>): number {
   switch (key) {
     case 'index': return 0; // 默认顺序，asc/desc 通过外层 reverse 实现
     case 'url': return a.request.url.localeCompare(b.request.url);
@@ -43,6 +49,21 @@ function compareFlows(a: Flow, b: Flow, key: SortKey): number {
     case 'duration': return (a.durationMs || 0) - (b.durationMs || 0);
     case 'reqSize': return a.request.bodySize - b.request.bodySize;
     case 'respSize': return (a.response?.bodySize || 0) - (b.response?.bodySize || 0);
+    case 'edited': {
+      // 首次点击（asc）把「已编辑」置顶；再次点击（desc）置底；第三次取消
+      const av = isFlowEdited(a) ? 1 : 0;
+      const bv = isFlowEdited(b) ? 1 : 0;
+      return bv - av;
+    }
+    case 'note': {
+      // 空备注视为最小；有备注按字符串比较
+      const an = noteById[a.id] ?? a.note ?? '';
+      const bn = noteById[b.id] ?? b.note ?? '';
+      if (!an && !bn) return 0;
+      if (!an) return -1;
+      if (!bn) return 1;
+      return an.localeCompare(bn);
+    }
     default: return 0;
   }
 }
@@ -91,7 +112,7 @@ export function RequestList() {
       base = sort.dir === 'asc' ? filtered : [...filtered].reverse();
     } else {
       const arr = [...filtered];
-      arr.sort((a, b) => compareFlows(a, b, sort.key));
+      arr.sort((a, b) => compareFlows(a, b, sort.key, noteById));
       if (sort.dir === 'desc') arr.reverse();
       base = arr;
     }
@@ -108,7 +129,7 @@ export function RequestList() {
       else rest.push(f);
     }
     return pinnedRows.concat(rest);
-  }, [filtered, sort, pinnedIds, pinnedHosts, pinnedPaths]);
+  }, [filtered, sort, pinnedIds, pinnedHosts, pinnedPaths, noteById]);
 
   const orderedIds = useMemo(() => sorted.map((f) => f.id), [sorted]);
 
@@ -122,12 +143,42 @@ export function RequestList() {
     }
   }, [orderedIds, rangeSelect, toggleSelected, setSelected]);
 
+  const ROW_SIZE = 26;
   const rowVirtualizer = useVirtualizer({
     count: sorted.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 26,
+    estimateSize: () => ROW_SIZE,
     overscan: 20,
   });
+
+  // 抑制"顶部插入新行导致 viewport 抖动"：
+  // 默认排序 index desc → 新抓包会插到列表最上面，所有已有行 index+1，
+  // translateY 全部下移 ROW_SIZE 而 scrollTop 不变，用户看的行就"往下溜"一格。
+  // 做法：在 orderedIds 变化时，找视口顶部锚点行在新列表中的新位置，
+  // 用 delta * ROW_SIZE 补偿 scrollTop，让锚点行保持在原来的像素位置。
+  //仅当用户不在顶部（scrollTop > 0）时补偿；若锚点已被从列表移除则不补偿。
+  const prevOrderedIdsRef = useRef<string[]>(orderedIds);
+  useEffect(() => {
+    const prev = prevOrderedIdsRef.current;
+    prevOrderedIdsRef.current = orderedIds;
+    const el = parentRef.current;
+    if (!el) return;
+    const scrollTop = el.scrollTop;
+    //顶部：新条目本来就该露出来，不需要补偿
+    if (scrollTop <= 0) return;
+    // 只在长度变大（新增）时补偿，删除/排序切换等场景交给用户手动
+    if (orderedIds.length <= prev.length) return;
+    // 找视口顶部当前可见的锚点行（在旧列表里的 index）
+    const anchorOldIdx = Math.floor(scrollTop / ROW_SIZE);
+    const anchorId = prev[anchorOldIdx];
+    if (!anchorId) return;
+    const anchorNewIdx = orderedIds.indexOf(anchorId);
+    if (anchorNewIdx < 0) return;
+    const delta = anchorNewIdx - anchorOldIdx;
+    if (delta === 0) return;
+    // 立即（同步）修正 scrollTop，避免下一帧渲染出现视觉跳动
+    el.scrollTop = scrollTop + delta * ROW_SIZE;
+  }, [orderedIds]);
 
   // 跨窗口联动：当 scrollTargetId 被设置（如 AI Sessions 子窗口触发选中），滚动到该行
   const scrollTargetId = useFlowStore((s) => s.scrollTargetId);
@@ -175,18 +226,19 @@ export function RequestList() {
   return (
     <div className="h-full flex flex-col bg-pb-bg">
       <div className="flex items-center border-b border-pb-border bg-pb-panel text-xs text-pb-muted select-none pr-2">
-        {COLUMNS.map((c) => (
+        {COLUMNS.map((c, idx) => (
           <HeaderCell
             key={c.key}
             col={c}
             width={columnWidths[c.key]}
             sort={sort}
+            isLast={idx === COLUMNS.length - 1}
             onSortClick={c.sortKey ? () => cycleSort(c.sortKey!) : undefined}
             onResize={c.resizable && !c.flex ? (w) => setColumnWidth(c.key, w) : undefined}
           />
         ))}
       </div>
-      <div ref={parentRef} className="flex-1 overflow-y-scroll overflow-x-hidden pb-scroll">
+      <div ref={parentRef} data-testid="flow-list-scroller" className="flex-1 overflow-y-scroll overflow-x-hidden pb-scroll">
         <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
           {rowVirtualizer.getVirtualItems().map((v) => {
             const flow = sorted[v.index];
@@ -201,7 +253,7 @@ export function RequestList() {
                 primary={isPrimary}
                 pinned={isFlowPinned(flow, { pinnedIds, pinnedHosts, pinnedPaths })}
                 saved={!!savedIds[flow.id]}
-                note={noteById[flow.id]}
+                note={noteById[flow.id] ?? flow.note}
                 highlight={highlightById[flow.id] || flow.highlight}
                 onSelect={onRowClick}
                 onTogglePin={togglePin}
@@ -228,24 +280,27 @@ function HeaderCell({
   col,
   width,
   sort,
+  isLast,
   onSortClick,
   onResize,
 }: {
   col: Column;
   width?: number;
   sort: SortState | null;
+  isLast?: boolean;
   onSortClick?: () => void;
   onResize?: (width: number) => void;
 }) {
   const active = sort && col.sortKey && sort.key === col.sortKey;
   const startResize = useCallback(
-    (e: React.MouseEvent) => {
+    (fromLeft: boolean) => (e: React.MouseEvent) => {
       if (!onResize) return;
       e.preventDefault();
       e.stopPropagation();
       const startX = e.clientX;
       const startW = width ?? col.width ?? 80;
-      const sign = col.resizeFromLeft ? -1 : 1;   // 左侧 handle：向右拖动缩窄，向左拖动增宽
+      // 左边界handle：向右拖 = 缩窄；右边界 handle：向右拖 = 增宽
+      const sign = fromLeft ? -1 : 1;
       const onMove = (ev: MouseEvent) => {
         const next = startW + sign * (ev.clientX - startX);
         onResize(Math.max(40, next));
@@ -259,12 +314,16 @@ function HeaderCell({
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
     },
-    [onResize, width, col.width, col.resizeFromLeft],
+    [onResize, width, col.width],
   );
+  const pxCls = col.key === 'url' ? 'px-1' : 'px-2';
   return (
     <div
       className={cn(
-        'relative px-2 py-1 truncate flex items-center justify-start gap-1 text-left',
+        // 列间竖分隔线：与 Proxyman 一致（最后一列不加，避免贴到滚动条边）
+        'relative py-1 truncate flex items-center justify-start gap-1 text-left',
+        !isLast && 'border-r border-pb-border',
+        pxCls,
         onSortClick && 'cursor-pointer hover:text-pb-text',
       )}
       style={colStyle(col, width)}
@@ -278,16 +337,30 @@ function HeaderCell({
           : <ArrowDown size={10} className="text-pb-accent shrink-0" />
       )}
       {onResize && (
-        <span
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={startResize}
-          onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'absolute top-0 h-full w-1.5 cursor-col-resize hover:bg-pb-accent/40',
-            col.resizeFromLeft ? 'left-0 -ml-0.5' : 'right-0 -mr-0.5',
+        <>
+          {/* 主handle：默认在右边；resizeFromLeft列（如客户端）主handle 在左边 */}
+          <span
+            role="separator"
+            aria-orientation="vertical"
+            onMouseDown={startResize(!!col.resizeFromLeft)}
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              'absolute top-0 h-full w-1.5 cursor-col-resize hover:bg-pb-accent/40',
+              col.resizeFromLeft ? 'left-0 -ml-0.5' : 'right-0 -mr-0.5',
+            )}
+          />
+          {/* resizeFromLeft 列同时也提供右边界 handle，
+              避免客户端 ↔ 方法 之间的列缝没有可拖动区域 */}
+          {col.resizeFromLeft && (
+            <span
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResize(false)}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute top-0 h-full w-1.5 cursor-col-resize hover:bg-pb-accent/40 right-0 -mr-0.5"
+            />
           )}
-        />
+        </>
       )}
     </div>
   );
@@ -363,17 +436,28 @@ function Row({
             <Bookmark size={11} />
           </button>
           <span className="truncate">{flow.request.url}</span>
-          {note && (
-            <span title={note} className="shrink-0 text-pb-muted">
-              <Pencil size={10} />
-            </span>
-          )}
         </div>
         <div className="px-2 py-0.5 truncate text-xs flex items-center gap-1 text-left" style={cs(2)}>
-          {flow.app?.iconDataUrl && (
-            <img src={flow.app.iconDataUrl} alt="" className="w-3 h-3 shrink-0 rounded-[22%]" />
+          {flow.app ? (
+            <AppInfoTooltip
+              info={{
+                name: flow.app.name || '—',
+                pid: flow.app.pid,
+                bundleId: flow.app.bundleId,
+                bundlePath: flow.app.bundlePath,
+                execPath: flow.app.execPath,
+                iconDataUrl: flow.app.iconDataUrl,
+              }}
+              className="flex items-center gap-1 min-w-0 max-w-full"
+            >
+              {flow.app.iconDataUrl && (
+                <img src={flow.app.iconDataUrl} alt="" className="w-3 h-3 shrink-0 rounded-[22%]" />
+              )}
+              <span className="truncate">{flow.app.name || '—'}</span>
+            </AppInfoTooltip>
+          ) : (
+            <span className="truncate">—</span>
           )}
-          <span className="truncate">{flow.app?.name || '—'}</span>
         </div>
         <div className="px-2 py-0.5 flex items-center justify-start text-left" style={cs(3)}>
           <span className={cn('method-badge', methodColor(flow.request.method))}>
@@ -412,30 +496,13 @@ function Row({
         <div className="px-2 py-0.5 text-xs flex items-center justify-start text-left" style={cs(9)}>
           {flow.isTLS ? <Lock size={12} className="text-pb-success" /> : <LockOpen size={12} className="text-pb-muted" />}
         </div>
-        <div className="px-2 py-0.5 text-xs text-pb-muted text-left" style={cs(10)}>
-          {edited ? '✓' : ''}
+        <div className="px-2 py-0.5 text-xs flex items-center justify-start text-left" style={cs(10)}>
+          {edited ? (
+            <MatchedRulesBadge matched={flow.matchedRules || []} />
+          ) : null}
         </div>
-        <div className="px-1 py-0.5 flex justify-start" style={cs(11)}>
-          <button
-            className="text-pb-muted hover:text-pb-text opacity-0 group-hover:opacity-100"
-            title="更多操作（或右键）"
-            onClick={(e) => {
-              // 触发同一个 ContextMenu：合成右键事件到自身
-              e.stopPropagation();
-              const target = e.currentTarget.closest('[data-flow-id]') as HTMLElement | null;
-              if (!target) return;
-              const rect = target.getBoundingClientRect();
-              target.dispatchEvent(new MouseEvent('contextmenu', {
-                bubbles: true,
-                cancelable: true,
-                clientX: rect.right - 8,
-                clientY: rect.bottom - 4,
-                button: 2,
-              }));
-            }}
-          >
-            <MoreHorizontal size={14} />
-          </button>
+        <div className="px-2 py-0.5 text-xs text-pb-muted truncate text-left" style={cs(11)} title={note || ''}>
+          {note || ''}
         </div>
       </div>
     </FlowContextMenu>
@@ -449,4 +516,97 @@ function StatusDot({ status }: { status: Flow['status'] }) {
     : status === 'error' ? 'bg-pb-error'
     : 'bg-pb-muted';
   return <span className={cn('inline-block w-2 h-2 rounded-full mr-1 align-middle shrink-0', color)} />;
+}
+
+/**
+ * "已编辑" 单元格：hover 出现自定义 tooltip，展示所有命中规则；
+ * 点击某条规则 → 切到规则页并 focus 到具体行。
+ *
+ * - 使用 portal 让 tooltip 脱离虚拟滚动裁剪。
+ * - 点击行为通过 window.proxybaby.broadcast 发送 `nav:goto` + `rules:focus-line`
+ *   两个事件，主窗口对应订阅器会切tab + 定位光标。
+ */
+function MatchedRulesBadge({
+  matched,
+}: {
+  matched: {ruleId: string; ruleName: string; pattern: string; lineNo?: number }[];
+}) {
+  // 记录锚点位置 + 展开方向；translateX 用负100% 让 tooltip 右对齐 badge（避免右侧溢出被遮挡）
+  const [pos, setPos] = useState<{ x: number; y: number; rightAlign: boolean } | null>(null);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  // 用 timer 做 hover 意图判定：离开 badge → 短暂延迟后关闭，允许鼠标"斜穿"进入 tooltip
+  const closeTimer = useRef<number | null>(null);
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; }
+  }, []);
+  const openTooltip = useCallback(() => {
+    cancelClose();
+    const el = anchorRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // 估算 tooltip 宽度：min-w-[220]；如果右侧空间不足 240 则右对齐 badge 的右边缘
+    const spaceRight = window.innerWidth - r.right;
+    const rightAlign = spaceRight < 240;
+    setPos({ x: rightAlign ? r.right : r.left, y: r.bottom + 4, rightAlign });
+  }, [cancelClose]);
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => setPos(null), 150);
+  }, [cancelClose]);
+  useEffect(() => () => cancelClose(), [cancelClose]);
+  const gotoRule = useCallback(async (ruleSetId: string, lineNo?: number) => {
+    // 脚本类 ruleId 形如 `script:xxx`，暂不支持定位到行，跳过。
+    if (ruleSetId.startsWith('script:')) return;
+    const api = (window as any).proxybaby;
+    if (!api?.broadcast) return;
+    await api.broadcast('nav:goto', { page: 'rules' });
+    await api.broadcast('rules:focus-line', { ruleSetId, lineNo: lineNo || 1 });
+    setPos(null);
+  }, []);
+  return (
+    <>
+      <span
+        ref={anchorRef}
+        data-testid="edited-badge"
+        onMouseEnter={openTooltip}
+        onMouseLeave={scheduleClose}
+        onClick={(e) => { e.stopPropagation(); openTooltip(); }}
+        className="inline-flex items-center justify-center px-1 rounded text-pb-accent hover:bg-pb-accent/10 cursor-help select-none"
+        title=""
+      >
+        ✓
+      </span>
+      {pos && matched.length > 0 && createPortal(
+        <div
+          className="fixed z-[9999] min-w-[220px] max-w-[380px] rounded border border-pb-border bg-pb-panel text-xs shadow-lg py-1"
+          style={{
+            left: pos.x,
+            top: pos.y,
+            // 右对齐场景下用 translateX(-100%) 把 tooltip 从锚点右缘向左展开
+            transform: pos.rightAlign ? 'translateX(-100%)' : undefined,
+          }}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        >
+          <div className="px-2 py-1 text-pb-muted border-b border-pb-border/60">命中规则</div>
+          {matched.map((m, i) => (
+            <button
+              key={`${m.ruleId}:${m.lineNo ?? i}`}
+              data-testid="matched-rule-item"
+              onClick={(e) => { e.stopPropagation(); gotoRule(m.ruleId, m.lineNo); }}
+              className="w-full text-left px-2 py-1 hover:bg-pb-hover flex items-baseline gap-2"
+              title="点击跳转到规则行"
+            >
+              <span className="text-pb-text shrink-0">{m.ruleName}</span>
+              <span className="text-pb-muted truncate font-mono">{m.pattern}</span>
+              {typeof m.lineNo === 'number' && (
+                <span className="ml-auto text-pb-muted shrink-0">L{m.lineNo}</span>
+              )}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }

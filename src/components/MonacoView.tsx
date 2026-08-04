@@ -135,6 +135,10 @@ export interface MonacoViewProps {
   testId?: string;
   /** 指定模型路径，用于跟 extraLib 的类型定义关联（例如脚本编辑器传 `file:///scripts/xxx.js`）。 */
   path?: string;
+  /** 是否显示左侧行号，默认 'on'；小区块编辑器（body/mock json）传 'off' */
+  lineNumbers?: 'on' | 'off';
+  /** 是否显示 folding 折叠槽，默认 true；小区块 body 编辑传 false 更紧凑 */
+  folding?: boolean;
 }
 
 export function MonacoView({
@@ -146,6 +150,8 @@ export function MonacoView({
   className,
   testId,
   path,
+  lineNumbers = 'on',
+  folding = true,
 }: MonacoViewProps) {
   return (
     <div className={className} data-testid={testId} style={{ height, minHeight: 180 }}>
@@ -163,7 +169,11 @@ export function MonacoView({
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
           automaticLayout: true,
-          lineNumbers: 'on',
+          lineNumbers,
+          folding,
+          glyphMargin: lineNumbers === 'on',
+          lineDecorationsWidth: lineNumbers === 'on' ? undefined : 0,
+          lineNumbersMinChars: lineNumbers === 'on' ? undefined : 0,
           wordWrap: 'on',
           tabSize: 2,
           renderWhitespace: 'boundary',

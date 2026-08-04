@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Send, Copy } from 'lucide-react';
 import { generateCodeFromRequest, CODE_LANGS, type CodeLang } from '../lib/code-gen';
 import { MonacoView } from './MonacoView';
+import { HeadersEditor } from './HeadersEditor';
+import { BodyEditor } from './BodyEditor';
 import type { Header } from '../../shared/types';
 import { cn } from '../lib/cn';
 
@@ -32,6 +34,13 @@ export function ComposerView() {
         return { name: l.slice(0, idx).trim(), value: l.slice(idx + 1).trim() };
       });
   };
+
+  // BodyEditor 根据 Content-Type 头切语言（json/xml/html/...）
+  const bodyContentType = useMemo(
+    () => parseHeaders().find((h) => h.name.toLowerCase() === 'content-type')?.value,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [headersText],
+  );
 
   const send = async () => {
     setSending(true);
@@ -84,25 +93,27 @@ export function ComposerView() {
 
         <div>
           <label className="text-xs text-pb-muted">请求头（每行一个 Name: Value）</label>
-          <textarea
-            data-testid="composer-headers"
-            value={headersText}
-            onChange={(e) => setHeadersText(e.target.value)}
-            spellCheck={false}
-            className="w-full h-24 mt-1 pb-input font-mono text-xs px-2 py-1"
-          />
+          <div className="mt-1 border border-pb-border rounded overflow-hidden">
+            <HeadersEditor
+              testId="composer-headers"
+              value={headersText}
+              onChange={setHeadersText}
+              height="160px"
+            />
+          </div>
         </div>
 
         <div>
           <label className="text-xs text-pb-muted">请求体</label>
-          <textarea
-            data-testid="composer-body"
-            value={bodyText}
-            onChange={(e) => setBodyText(e.target.value)}
-            placeholder="raw body"
-            spellCheck={false}
-            className="w-full h-40 mt-1 pb-input font-mono text-xs px-2 py-1"
-          />
+          <div className="mt-1 border border-pb-border rounded overflow-hidden">
+            <BodyEditor
+              testId="composer-body"
+              value={bodyText}
+              onChange={setBodyText}
+              contentType={bodyContentType}
+              height="200px"
+            />
+          </div>
         </div>
 
         {lastResult && (

@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { forwardRef, useMemo, useState } from 'react';
 import * as Collapsible from '@radix-ui/react-collapsible';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { ChevronDown, ChevronRight, Globe, Package, Pin, Bookmark, PanelLeftClose } from 'lucide-react';
 import { useFlowStore } from '../store/flows';
 import { cn } from '../lib/cn';
 import { isFlowPinned } from '../lib/filter';
+import { AppInfoTooltip, type AppInfoDetails } from './AppInfoTooltip';
 import type { FilterKind, FilterEntry } from '../../shared/types';
 import {
   QuickRuleSubMenu,
@@ -34,7 +35,7 @@ export function Sidebar() {
   const q = sidebarQuery.trim().toLowerCase();
 
   const { apps, hosts, subpaths } = useMemo(() => {
-    const appMap = new Map<string, { count: number; iconDataUrl?: string; bundlePath?: string; hosts: Set<string>; flowIds: string[] }>();
+    const appMap = new Map<string, { count: number; iconDataUrl?: string; bundlePath?: string; bundleId?: string; execPath?: string; pids: Set<number>; hosts: Set<string>; flowIds: string[] }>();
     const hostMap = new Map<string, number>();
     const subMap = new Map<string, Map<string, number>>();
     for (const f of flows) {
@@ -46,11 +47,17 @@ export function Sidebar() {
         prev.flowIds.push(f.id);
         if (!prev.iconDataUrl && f.app?.iconDataUrl) prev.iconDataUrl = f.app.iconDataUrl;
         if (!prev.bundlePath && f.app?.bundlePath) prev.bundlePath = f.app.bundlePath;
+        if (!prev.bundleId && f.app?.bundleId) prev.bundleId = f.app.bundleId;
+        if (!prev.execPath && f.app?.execPath) prev.execPath = f.app.execPath;
+        if (f.app?.pid) prev.pids.add(f.app.pid);
       } else {
         appMap.set(appName, {
           count: 1,
           iconDataUrl: f.app?.iconDataUrl,
           bundlePath: f.app?.bundlePath,
+          bundleId: f.app?.bundleId,
+          execPath: f.app?.execPath,
+          pids: new Set(f.app?.pid ? [f.app.pid] : []),
           hosts: new Set([f.request.host]),
           flowIds: [f.id],
         });
@@ -122,9 +129,9 @@ export function Sidebar() {
   };
   const saveCount = Object.keys(savedIds).length;
 
-  // Saved tree：按 savedIds 反查 flow → app / host / path 聚合（一次遍历）
+  // Saved tree：按 savedIds 反查 flow → app / host / path聚合（一次遍历）
   const savedTree = useMemo(() => {
-    const appMap = new Map<string, { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string }>();
+    const appMap = new Map<string, { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string; bundleId?: string; execPath?: string; pids: Set<number> }>();
     const hostMap = new Map<string, { host: string; count: number; paths: [string, number][] }>();
     const hostPathMap = new Map<string, Map<string, number>>();
     for (const f of flows) {
@@ -135,8 +142,22 @@ export function Sidebar() {
         a.count++;
         a.hosts.add(f.request.host);
         a.flowIds.push(f.id);
+        if (!a.bundlePath && f.app?.bundlePath) a.bundlePath = f.app.bundlePath;
+        if (!a.bundleId && f.app?.bundleId) a.bundleId = f.app.bundleId;
+        if (!a.execPath && f.app?.execPath) a.execPath = f.app.execPath;
+        if (f.app?.pid) a.pids.add(f.app.pid);
       } else {
-        appMap.set(appName, { name: appName, count: 1, iconDataUrl: f.app?.iconDataUrl, hosts: new Set([f.request.host]), flowIds: [f.id], bundlePath: f.app?.bundlePath });
+        appMap.set(appName, {
+          name: appName,
+          count: 1,
+          iconDataUrl: f.app?.iconDataUrl,
+          hosts: new Set([f.request.host]),
+          flowIds: [f.id],
+          bundlePath: f.app?.bundlePath,
+          bundleId: f.app?.bundleId,
+          execPath: f.app?.execPath,
+          pids: new Set(f.app?.pid ? [f.app.pid] : []),
+        });
       }
       const host = f.request.host;
       const h = hostMap.get(host);
@@ -164,6 +185,9 @@ export function Sidebar() {
         hosts: meta?.hosts ?? new Set<string>(),
         flowIds: meta?.flowIds ?? [],
         bundlePath: meta?.bundlePath,
+        bundleId: meta?.bundleId,
+        execPath: meta?.execPath,
+        pids: meta?.pids ?? new Set<number>(),
       };
     });
     const hostList = Object.keys(pinnedHosts).map((host) => {
@@ -377,6 +401,7 @@ export function Sidebar() {
               <AppContextMenu
                 key={name}
                 name={name}
+                bundleId={meta.bundleId}
                 pinned={!!pinnedApps[name]}
                 sslDisabled={allHostsMitmDisabled}
                 onPin={() => togglePinApp(name)}
@@ -396,6 +421,16 @@ export function Sidebar() {
                   pinned={!!pinnedApps[name]}
                   onClick={() => setFilter({ appName: filter.appName === name ? undefined : name, host: undefined, pathPrefix: undefined, special: undefined })}
                   query={q}
+                  data-testid="app-row"
+                  data-app={name}
+                  appInfo={{
+                    name,
+                    pids: [...meta.pids],
+                    bundleId: meta.bundleId,
+                    bundlePath: meta.bundlePath,
+                    execPath: meta.execPath,
+                    iconDataUrl: meta.iconDataUrl,
+                  }}
                 />
               </AppContextMenu>
             );
@@ -445,6 +480,7 @@ export function Sidebar() {
 
 function AppContextMenu({
   name,
+  bundleId,
   pinned,
   sslDisabled,
   onPin,
@@ -456,6 +492,7 @@ function AppContextMenu({
   children,
 }: {
   name: string;
+  bundleId?: string;
   pinned: boolean;
   sslDisabled: boolean;
   onPin: () => void;
@@ -487,6 +524,20 @@ function AppContextMenu({
           <ContextMenu.Item onSelect={onReveal} className={itemCls}>
             <span className="flex-1">在访达中显示…</span>
           </ContextMenu.Item>
+          <ContextMenu.Item
+            onSelect={() => navigator.clipboard?.writeText(name).catch(() => {})}
+            className={itemCls}
+          >
+            <span className="flex-1">复制应用名</span>
+          </ContextMenu.Item>
+          {bundleId && (
+            <ContextMenu.Item
+              onSelect={() => navigator.clipboard?.writeText(bundleId).catch(() => {})}
+              className={itemCls}
+            >
+              <span className="flex-1">复制 Bundle ID</span>
+            </ContextMenu.Item>
+          )}
 
           <ContextMenu.Separator className="my-1 h-px bg-pb-border/60" />
           <ContextMenu.Item onSelect={() => onAddToList('include')} className={itemCls}>
@@ -1013,7 +1064,7 @@ function PinnedTree({
 }: {
   pinCount: number;
   tree: {
-    appList: { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string }[];
+    appList: { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string; bundleId?: string; execPath?: string; pids: Set<number> }[];
     hostList: { host: string; count: number; paths: { full: string; seg: string }[] }[];
     orphanPaths: { full: string; host: string; seg: string }[];
   };
@@ -1099,6 +1150,7 @@ function PinnedTree({
             <div key={`pinned-app:${a.name}`}>
               <AppContextMenu
                 name={a.name}
+                bundleId={a.bundleId}
                 pinned={!!pinnedApps[a.name]}
                 sslDisabled={allHostsMitmDisabled}
                 onPin={() => onTogglePinApp(a.name)}
@@ -1123,26 +1175,38 @@ function PinnedTree({
                   >
                     {hostList.length === 0 ? <span className="inline-block w-3" /> : isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </button>
-                  <div
+                  <AppInfoTooltip
+                    info={{
+                      name: a.name,
+                      pids: [...a.pids],
+                      bundleId: a.bundleId,
+                      bundlePath: a.bundlePath,
+                      execPath: a.execPath,
+                      iconDataUrl: a.iconDataUrl,
+                    }}
                     className="flex-1 flex items-center gap-1.5 min-w-0"
-                    onClick={() =>
-                      setFilter({
-                        appName: isActive ? undefined : a.name,
-                        host: undefined,
-                        pathPrefix: undefined,
-                        special: isActive ? undefined : filter.special,
-                      })
-                    }
                   >
-                    {a.iconDataUrl ? (
-                      <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
-                    ) : (
-                      <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
-                    )}
-                    <span className="flex-1 truncate text-left">{a.name}</span>
-                    <Pin size={10} className={isActive ? 'text-white' : 'text-pb-accent'} />
-                    <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
-                  </div>
+                    <span
+                      className="flex-1 flex items-center gap-1.5 min-w-0"
+                      onClick={() =>
+                        setFilter({
+                          appName: isActive ? undefined : a.name,
+                          host: undefined,
+                          pathPrefix: undefined,
+                          special: isActive ? undefined : filter.special,
+                        })
+                      }
+                    >
+                      {a.iconDataUrl ? (
+                        <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
+                      ) : (
+                        <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
+                      )}
+                      <span className="flex-1 truncate text-left">{a.name}</span>
+                      <Pin size={10} className={isActive ? 'text-white' : 'text-pb-accent'} />
+                      <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
+                    </span>
+                  </AppInfoTooltip>
                 </div>
               </AppContextMenu>
               {isOpen && hostList.map((host) => (
@@ -1255,7 +1319,7 @@ function SavedTree({
 }: {
   saveCount: number;
   tree: {
-    appList: { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string }[];
+    appList: { name: string; count: number; iconDataUrl?: string; hosts: Set<string>; flowIds: string[]; bundlePath?: string; bundleId?: string; execPath?: string; pids: Set<number> }[];
     hostList: { host: string; count: number }[];
     hostPathMap: Map<string, Map<string, number>>;
   };
@@ -1338,6 +1402,7 @@ function SavedTree({
             <div key={`saved-app:${a.name}`}>
               <AppContextMenu
                 name={a.name}
+                bundleId={a.bundleId}
                 pinned={!!pinnedApps[a.name]}
                 sslDisabled={allHostsMitmDisabled}
                 onPin={() => onTogglePinApp(a.name)}
@@ -1362,25 +1427,37 @@ function SavedTree({
                   >
                     {hostList.length === 0 ? <span className="inline-block w-3" /> : isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </button>
-                  <div
+                  <AppInfoTooltip
+                    info={{
+                      name: a.name,
+                      pids: [...a.pids],
+                      bundleId: a.bundleId,
+                      bundlePath: a.bundlePath,
+                      execPath: a.execPath,
+                      iconDataUrl: a.iconDataUrl,
+                    }}
                     className="flex-1 flex items-center gap-1.5 min-w-0"
-                    onClick={() =>
-                      setFilter({
-                        appName: isActive ? undefined : a.name,
-                        host: undefined,
-                        pathPrefix: undefined,
-                        special: isActive ? undefined : filter.special,
-                      })
-                    }
                   >
-                    {a.iconDataUrl ? (
-                      <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
-                    ) : (
-                      <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
-                    )}
-                    <span className="flex-1 truncate text-left">{a.name}</span>
-                    <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
-                  </div>
+                    <span
+                      className="flex-1 flex items-center gap-1.5 min-w-0"
+                      onClick={() =>
+                        setFilter({
+                          appName: isActive ? undefined : a.name,
+                          host: undefined,
+                          pathPrefix: undefined,
+                          special: isActive ? undefined : filter.special,
+                        })
+                      }
+                    >
+                      {a.iconDataUrl ? (
+                        <img src={a.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-[22%]" />
+                      ) : (
+                        <Package size={12} className={isActive ? 'text-white' : 'text-pb-muted'} />
+                      )}
+                      <span className="flex-1 truncate text-left">{a.name}</span>
+                      <span className={cn('text-xs', isActive ? 'text-white/80' : 'text-pb-muted')}>{a.count}</span>
+                    </span>
+                  </AppInfoTooltip>
                 </div>
               </AppContextMenu>
               {isOpen && hostList.map((host) => (
@@ -1450,6 +1527,8 @@ function Item({
   pinned,
   onClick,
   query,
+  appInfo,
+  ...rest
 }: {
   icon: React.ReactNode;
   label: string;
@@ -1458,9 +1537,19 @@ function Item({
   pinned?: boolean;
   onClick?: () => void;
   query?: string;
-}) {
+  appInfo?: AppInfoDetails;
+} & React.HTMLAttributes<HTMLDivElement>) {
+  const inner = (
+    <>
+      <span className={cn(active ? 'text-white' : 'text-pb-muted')}>{icon}</span>
+      <span className="flex-1 truncate text-left">
+        <Highlight text={label} query={query} />
+      </span>
+    </>
+  );
   return (
-    <div
+    <ItemDiv
+      {...rest}
       onClick={onClick}
       className={cn(
         'w-full flex items-center gap-1.5 pl-6 pr-2 py-1 text-sm cursor-default select-none',
@@ -1468,15 +1557,26 @@ function Item({
         active ? 'bg-pb-selected text-white' : 'hover:bg-pb-hover',
       )}
     >
-      <span className={cn(active ? 'text-white' : 'text-pb-muted')}>{icon}</span>
-      <span className="flex-1 truncate text-left">
-        <Highlight text={label} query={query} />
-      </span>
+      {appInfo ? (
+    <AppInfoTooltip info={appInfo} className="flex-1 flex items-center gap-1.5 min-w-0">
+          {inner}
+        </AppInfoTooltip>
+      ) : (
+        inner
+      )}
       {pinned && <Pin size={10} className={cn(active ? 'text-white' : 'text-pb-accent')} />}
       {count !== undefined && <span className={cn('text-xs', active ? 'text-white/80' : 'text-pb-muted')}>{count}</span>}
-    </div>
+    </ItemDiv>
   );
 }
+
+// 承接 Radix ContextMenu.Trigger asChild 注入的 ref / onContextMenu 等 props。
+// Item 之前是普通函数组件，没有 forwardRef 且未透传 props，导致 AppContextMenu 包裹时右键菜单失效。
+const ItemDiv = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  function ItemDiv(props, ref) {
+    return <div ref={ref} {...props} />;
+  },
+);
 
 /** 在 text 中高亮 query（大小写不敏感），命中片段渲染为浅色背景 */
 function Highlight({ text, query }: { text: string; query?: string }) {

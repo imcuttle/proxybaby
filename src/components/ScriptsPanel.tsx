@@ -9,6 +9,7 @@ import { Plus, Trash2, Save, Play } from 'lucide-react';
 import type { ScriptSummary, ScriptTestCase, ScriptTestResult } from '../../shared/types';
 import { cn } from '../lib/cn';
 import { MonacoView } from './MonacoView';
+import { BodyEditor } from './BodyEditor';
 
 export function ScriptsPanel() {
   const [items, setItems] = useState<ScriptSummary[]>([]);
@@ -247,12 +248,14 @@ function ScriptTestPanel({ scriptId, draftCode }: { scriptId: string; draftCode:
           )}
           <div>
             <div className="text-pb-muted mb-1">Body</div>
-            <textarea
-              className="pb-input px-1 py-1 text-xs w-full font-mono"
-              rows={4}
-              value={tc.request.bodyText || ''}
-              onChange={(e) => setTc({ ...tc, request: { ...tc.request, bodyText: e.target.value } })}
-            />
+            <div className="border border-pb-border rounded overflow-hidden">
+              <BodyEditor
+                value={tc.request.bodyText || ''}
+                onChange={(v) => setTc({ ...tc, request: { ...tc.request, bodyText: v } })}
+                contentType={tc.request.headers?.find((h) => h.name.toLowerCase() === 'content-type')?.value}
+                height="120px"
+              />
+            </div>
           </div>
         </div>
 
@@ -295,12 +298,14 @@ function ScriptTestPanel({ scriptId, draftCode }: { scriptId: string; draftCode:
               )}
               <div>
                 <div className="text-pb-muted mb-1">Body</div>
-                <textarea
-                  className="pb-input px-1 py-1 text-xs w-full font-mono"
-                  rows={4}
-                  value={tc.response.bodyText || ''}
-                  onChange={(e) => setTc({ ...tc, response: { ...tc.response!, bodyText: e.target.value } })}
-                />
+                <div className="border border-pb-border rounded overflow-hidden">
+                  <BodyEditor
+                    value={tc.response.bodyText || ''}
+                    onChange={(v) => setTc({ ...tc, response: { ...tc.response!, bodyText: v } })}
+                    contentType={tc.response.headers?.find((h) => h.name.toLowerCase() === 'content-type')?.value}
+                    height="120px"
+                  />
+                </div>
               </div>
             </>
           )}

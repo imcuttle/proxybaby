@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useFlowStore } from '../store/flows';
+import { HeadersEditor } from './HeadersEditor';
+import { BodyEditor } from './BodyEditor';
 import type { Header } from '../../shared/types';
 
 /**
@@ -36,6 +38,13 @@ export function BreakpointModal() {
           ? { name: l.slice(0, idx).trim(), value: l.slice(idx + 1).trim() }
           : { name: l, value: '' };
       });
+
+  // BodyEditor 根据当前编辑中的 Content-Type 切语言
+  const bodyContentType = useMemo(
+    () => parseHeaders().find((h) => h.name.toLowerCase() === 'content-type')?.value,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [headersText],
+  );
 
   const cont = () => {
     window.proxybaby.breakpointResume({
@@ -75,21 +84,26 @@ export function BreakpointModal() {
           )}
           <div>
             <label className="text-xs text-pb-muted">Headers（每行 name: value）</label>
-            <textarea
-              className="w-full h-40 bg-pb-bg border border-pb-border rounded p-2 font-mono text-xs mt-1 pb-scroll"
-              value={headersText}
-              onChange={(e) => setHeadersText(e.target.value)}
-              spellCheck={false}
-            />
+            <div className="mt-1 border border-pb-border rounded overflow-hidden">
+              <HeadersEditor
+                testId="bp-headers"
+                value={headersText}
+                onChange={setHeadersText}
+                height="160px"
+              />
+            </div>
           </div>
           <div>
             <label className="text-xs text-pb-muted">Body</label>
-            <textarea
-              className="w-full h-40 bg-pb-bg border border-pb-border rounded p-2 font-mono text-xs mt-1 pb-scroll"
-              value={bodyText}
-              onChange={(e) => setBodyText(e.target.value)}
-              spellCheck={false}
-            />
+            <div className="mt-1 border border-pb-border rounded overflow-hidden">
+              <BodyEditor
+                testId="bp-body"
+                value={bodyText}
+                onChange={setBodyText}
+                contentType={bodyContentType}
+                height="160px"
+              />
+            </div>
           </div>
         </div>
         <div className="flex items-center justify-end gap-2 px-4 py-2 border-t border-pb-border">

@@ -331,16 +331,38 @@ function SummaryView({ flow }: { flow: any }) {
     ['命中规则', (flow.matchedRules || []).map((r: any) => r.pattern).join('\n') || '—'],
   ];
   return (
-    <table className="w-full text-xs font-mono">
-      <tbody>
-        {rows.map(([k, v]) => (
-          <tr key={k} className="border-b border-pb-border/30">
-            <td className="px-2 py-1 text-pb-muted align-top w-1/4">{k}</td>
-            <td className="px-2 py-1 break-all whitespace-pre-wrap">{v}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div>
+      <table className="w-full text-xs font-mono">
+        <tbody>
+          {rows.map(([k, v]) => (
+            <tr key={k} className="border-b border-pb-border/30">
+              <td className="px-2 py-1 text-pb-muted align-top w-1/4">{k}</td>
+              <td className="px-2 py-1 break-all whitespace-pre-wrap">{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="p-2">
+        <button
+          className="pb-btn text-xs border border-pb-border px-2 py-1"
+          data-testid="summary-open-rule-debug"
+          onClick={() => window.proxybaby.ruleDebugOpen({
+            url: flow.request.url,
+            method: flow.request.method,
+            scheme: flow.request.scheme,
+            headers: flow.request.headers,
+            bodyText: flow.request.bodyText,
+            actualFlow: {
+              id: flow.id,
+              edited: !!flow.edited || (flow.matchedRules?.length ?? 0) > 0,
+              matchedRules: flow.matchedRules || [],
+              responseStatus: flow.response?.status,
+            },
+          })}
+          title="模拟这个请求，查看规则匹配诊断与 dry-run"
+        >用 Rule Debug 分析…</button>
+      </div>
+    </div>
   );
 }
 

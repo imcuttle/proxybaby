@@ -24,6 +24,9 @@ export const AUTO_UPDATE_ENABLED = false;
 const REPO_OWNER = 'imcuttle';
 const REPO_NAME = 'proxybaby';
 const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
+/** 无鉴权、无限流的备用源：github.com 会302 到 /releases/tag/<version> */
+const RELEASES_HTML_LATEST = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
+const RELEASES_HTML_BASE = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`;
 const REQUEST_TIMEOUT_MS = 5000;
 /** 手动检查以外的两次自动检查最小间隔 */
 const AUTO_CHECK_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
@@ -124,6 +127,14 @@ export function __setFetcherForTest(f: Fetcher | null): void {
   fetcher = f ?? defaultFetch;
 }
 
+/** 允许测试注入 302 fallback */
+type FallbackFetcher = () => Promise<{ tag: string }>;
+let fallbackFetcher: FallbackFetcher = fetchLatestViaRedirect;
+
+export function __setFallbackFetcherForTest(f: FallbackFetcher | null): void {
+  fallbackFetcher = f ?? fetchLatestViaRedirect;
+}
+
 function defaultFetch(url: string): Promise<GithubReleaseResponse> {
   return new Promise((resolve, reject) => {
     const req = https.request(
@@ -141,7 +152,16 @@ function defaultFetch(url: string): Promise<GithubReleaseResponse> {
         res.on('end', () => {
           const status = res.statusCode ?? 0;
           if (status < 200 || status >= 300) {
-            reject(new Error(`GitHub API HTTP ${status}`));
+            //区分限流：403 + rate limit
+            const body = Buffer.concat(chunks).toString('utf-8');
+            const isRateLimit = status === 403 && /rate limit/i.test(body);
+            const err = new Error(
+              isRateLimit
+                ? 'GitHub API rate limited'
+                : `GitHub API HTTP ${status}`,
+            );
+            (err as Error & { code?: string }).code = isRateLimit ? 'RATE_LIMITED' : `HTTP_${status}`;
+            reject(err);
             return;
           }
           try {
@@ -156,6 +176,44 @@ function defaultFetch(url: string): Promise<GithubReleaseResponse> {
     req.on('error', (err) => reject(err));
     req.setTimeout(REQUEST_TIMEOUT_MS, () => {
       req.destroy(new Error('GitHub API request timeout'));
+    });
+    req.end();
+  });
+}
+
+/**
+ * 无鉴权、无限流的备用抓取：只请求 github.com/…/releases/latest 的 302 头，
+ * 从 Location 里提取 tag 名 (v0.8.0 之类)。拿不到 release body/assets。
+ */
+function fetchLatestViaRedirect(): Promise<{ tag: string }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      RELEASES_HTML_LATEST,
+      {
+        method: 'HEAD',
+        headers: { 'User-Agent': 'ProxyBaby-Updater' },
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const loc = res.headers.location || '';
+        // 消费/丢弃 body
+        res.resume();
+        if (status >= 300 && status < 400 && loc) {
+          const m = /\/releases\/tag\/([^/?#]+)/.exec(loc);
+          if (m) {
+            resolve({ tag: decodeURIComponent(m[1]) });
+            return;
+          }
+          reject(new Error(`Unexpected redirect: ${loc}`));
+          return;
+        }
+        // 有 releases 但没跳过（无发布）或异常
+        reject(new Error(`GitHub releases HTTP ${status}`));
+      },
+    );
+    req.on('error', (err) => reject(err));
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error('GitHub releases request timeout'));
     });
     req.end();
   });
@@ -193,12 +251,26 @@ export async function checkForUpdates(opts: CheckOptions = {}): Promise<UpdateCh
     return { ok: true, info: state.lastResult ?? null };
   }
   const current = getCurrentVersion();
-  let release: GithubReleaseResponse;
+  let release: GithubReleaseResponse | null = null;
+  let apiError: Error | null = null;
   try {
     release = await fetcher(RELEASES_URL);
   } catch (err) {
-    return { ok: false, info: null, error: err instanceof Error ? err.message : String(err) };
+    apiError = err instanceof Error ? err : new Error(String(err));
   }
+
+  //API 失败（限流/网络）时用 302 兜底：只能拿到版本号，body 留空
+  if (!release) {
+    try {
+      const { tag } = await fallbackFetcher();
+      release = { tag_name: tag, html_url: `${RELEASES_HTML_BASE}/tag/${tag}` };
+    } catch (fallbackErr) {
+      // 两个源都失败：优先报告更能给用户帮助的错误
+      const errMsg = friendlyErrorMessage(apiError, fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr)));
+      return { ok: false, info: null, error: errMsg };
+    }
+  }
+
   const latestRaw = release.tag_name || release.name || '';
   const latestVersion = latestRaw.replace(/^v/i, '');
   const isPrerelease = release.prerelease === true;
@@ -260,4 +332,14 @@ export function __resetForTest(): void {
   loaded = false;
   memState = {};
   statePath = null;
+}
+
+/** 组合两个源的错误，输出用户可读的中文提示 */
+function friendlyErrorMessage(apiErr: Error | null, fallbackErr: Error): string {
+  const code = (apiErr as (Error & { code?: string }) | null)?.code;
+  if (code === 'RATE_LIMITED') {
+    return 'GitHub 匿名接口触发限流；也无法访问发布页，请稍后重试或检查网络。';
+  }
+  const detail = fallbackErr.message || apiErr?.message || '未知错误';
+  return `无法连接 GitHub 获取更新信息：${detail}`;
 }

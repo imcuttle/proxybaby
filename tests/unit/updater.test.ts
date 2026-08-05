@@ -14,6 +14,7 @@ import {
   skipVersion,
   getLastResult,
   __setFetcherForTest,
+  __setFallbackFetcherForTest,
   __resetForTest,
 } from '@electron/updater/updater';
 
@@ -23,6 +24,7 @@ async function clean() {
   try { await fs.rm(stateFile, { force: true }); } catch {}
   __resetForTest();
   __setFetcherForTest(null);
+  __setFallbackFetcherForTest(null);
 }
 
 describe('parseVersion', () => {
@@ -124,9 +126,25 @@ describe('checkForUpdates', () => {
     __setFetcherForTest(async () => {
       throw new Error('boom');
     });
+    __setFallbackFetcherForTest(async () => {
+      throw new Error('offline');
+    });
     const r = await checkForUpdates({ force: true });
     expect(r.ok).toBe(false);
-    expect(r.error).toContain('boom');
+    expect(r.error).toContain('offline');
+  });
+
+  it('falls back to redirect when API fails', async () => {
+    __setFetcherForTest(async () => {
+      throw Object.assign(new Error('GitHub API rate limited'), { code: 'RATE_LIMITED' });
+    });
+    __setFallbackFetcherForTest(async () => ({ tag: 'v99.0.0' }));
+    const r = await checkForUpdates({ force: true });
+    expect(r.ok).toBe(true);
+    expect(r.info?.latestVersion).toBe('99.0.0');
+    expect(r.info?.hasUpdate).toBe(true);
+    // release body未知
+    expect(r.info?.releaseNotes).toBe('');
   });
 
   it('getLastResult returns persisted info', async () => {

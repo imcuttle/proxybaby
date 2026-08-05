@@ -425,12 +425,17 @@ async function runUpdaterCheck(opts: { silent: boolean }): Promise<void> {
   const result = await updater.checkForUpdates({ silent: opts.silent, force: !opts.silent });
   if (!result.ok) {
     if (!opts.silent) {
-      dialog.showMessageBox({
+      const res = await dialog.showMessageBox({
         type: 'warning',
         message: '检查更新失败',
         detail: result.error || '未知网络错误',
-        buttons: ['好的'],
-      }).catch(() => {});
+        buttons: ['打开发布页', '好的'],
+        defaultId: 0,
+        cancelId: 1,
+      }).catch(() => null);
+      if (res && res.response === 0) {
+        await updater.openReleasePage('https://github.com/imcuttle/proxybaby/releases').catch(() => {});
+      }
     }
     return;
   }

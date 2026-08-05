@@ -1,5 +1,15 @@
 # proxybaby
 
+## 0.9.0
+
+### ✨ 新功能
+- **CLI 控制通道端口可配置**：设置面板新增「CLI 控制通道」section，可修改本地控制端口（默认 8898）。支持通过 `PROXYBABY_CTRL_PORT` 环境变量运行时覆盖，方便在同一台机器并行跑多实例 / e2e 隔离。(`4b90d8f`)
+- **端口占用优雅降级**：`startControlServer` 挂了 `error` handler，EADDRINUSE 时不再让主进程崩溃，只是 CLI 通道不启动，抓包主链路不受影响。(`4b90d8f`)
+
+### 🧪 测试
+- 新增 `tests/e2e/cli.e2e.ts`：spawn `bin/proxybaby.cjs` 子进程，覆盖 status / app / record / rule 全流程 / plugin / session export / controlServer IPC 全部命令，共 26 个用例。beforeAll 用随机空闲端口 + `PROXYBABY_CTRL_PORT` env 注入避开用户本机 8898 冲突。(`00af8a4`)
+- 设置窗口 e2e 补齐控制通道端口面板可视化 case。(`4b90d8f`)
+
 ## 0.8.1
 
 ### 🐛 修复

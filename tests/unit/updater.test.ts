@@ -13,8 +13,10 @@ import {
   checkForUpdates,
   skipVersion,
   getLastResult,
+  extractVersionSection,
   __setFetcherForTest,
   __setFallbackFetcherForTest,
+  __setChangelogFetcherForTest,
   __resetForTest,
 } from '@electron/updater/updater';
 
@@ -25,6 +27,7 @@ async function clean() {
   __resetForTest();
   __setFetcherForTest(null);
   __setFallbackFetcherForTest(null);
+  __setChangelogFetcherForTest(null);
 }
 
 describe('parseVersion', () => {
@@ -134,16 +137,30 @@ describe('checkForUpdates', () => {
     expect(r.error).toContain('offline');
   });
 
-  it('falls back to redirect when API fails', async () => {
+  it('falls back to redirect when API fails; changelog fetcher fills body', async () => {
     __setFetcherForTest(async () => {
       throw Object.assign(new Error('GitHub API rate limited'), { code: 'RATE_LIMITED' });
     });
     __setFallbackFetcherForTest(async () => ({ tag: 'v99.0.0' }));
+    __setChangelogFetcherForTest(async (tag) => {
+      expect(tag).toBe('v99.0.0');
+      return '### 🐛 修复\n- fix something';
+    });
     const r = await checkForUpdates({ force: true });
     expect(r.ok).toBe(true);
     expect(r.info?.latestVersion).toBe('99.0.0');
     expect(r.info?.hasUpdate).toBe(true);
-    // release body未知
+    expect(r.info?.releaseNotes).toContain('fix something');
+  });
+
+  it('fallback keeps releaseNotes empty when raw CHANGELOG unavailable', async () => {
+    __setFetcherForTest(async () => {
+      throw Object.assign(new Error('GitHub API rate limited'), { code: 'RATE_LIMITED' });
+    });
+    __setFallbackFetcherForTest(async () => ({ tag: 'v99.0.0' }));
+    __setChangelogFetcherForTest(async () => '');
+    const r = await checkForUpdates({ force: true });
+    expect(r.ok).toBe(true);
     expect(r.info?.releaseNotes).toBe('');
   });
 
@@ -157,5 +174,64 @@ describe('checkForUpdates', () => {
     await checkForUpdates({ force: true });
     const last = await getLastResult();
     expect(last?.latestVersion).toBe('99.0.0');
+  });
+});
+
+describe('extractVersionSection', () => {
+  const sample = [
+    '# proxybaby',
+    '',
+    '## 0.9.0',
+    '',
+    '### ✨ 新功能',
+    '- shiny',
+    '',
+    '## 0.8.1',
+    '',
+    '### 🐛 修复',
+    '- fix a',
+    '',
+    '###🔧 其他',   // 无空格 heading
+    '- chore b',
+    '',
+    '## 0.8.0',
+    '',
+    'legacy',
+    '',
+  ].join('\n');
+
+  it('extracts the section for the requested version', () => {
+    const s = extractVersionSection(sample, '0.8.1');
+    expect(s).toContain('### 🐛 修复');
+    expect(s).toContain('- fix a');
+    expect(s).toContain('- chore b');
+    // 相邻版本段不能被包进来
+    expect(s).not.toContain('shiny');
+    expect(s).not.toContain('legacy');
+  });
+
+  it('normalizes headings without space (`###🔧` → `### 🔧`)', () => {
+    const s = extractVersionSection(sample, '0.8.1');
+    expect(s).toContain('### 🔧 其他');
+    expect(s).not.toMatch(/^###🔧/m);
+  });
+
+  it('accepts v-prefixed version', () => {
+    const s = extractVersionSection(sample, 'v0.8.1');
+    expect(s).toContain('- fix a');
+  });
+
+  it('returns "" when version not found', () => {
+    expect(extractVersionSection(sample, '9.9.9')).toBe('');
+  });
+
+  it('handles trailing version (last section in file)', () => {
+    const s = extractVersionSection(sample, '0.8.0');
+    expect(s).toContain('legacy');
+  });
+
+  it('returns "" on empty inputs', () => {
+    expect(extractVersionSection('', '0.8.1')).toBe('');
+    expect(extractVersionSection(sample, '')).toBe('');
   });
 });

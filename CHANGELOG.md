@@ -15,7 +15,7 @@
 ### 🐛 修复
 - fix(updater): 检查更新时，GitHub REST API 触发匿名限流（403 rate limit）或网络受限，会自动降级到 `github.com/…/releases/latest` 的 302 重定向兜底通道抽取版本号；两个源都失败时给出可读的中文原因；失败弹窗新增 "打开发布页" 按钮，直接跳到releases 页面 (`438da9f`)
 
-###🔧 其他
+### 🔧 其他
 - chore(ui): 移除 ListenPopover 里多余的 `export http_proxy=…` 提示行，保留复制按钮即可 (`d723da6`)
 - docs(release): `/release` 命令内置 commit 阶段说明 (`7862e5a`)
 

@@ -24,9 +24,11 @@ export const AUTO_UPDATE_ENABLED = false;
 const REPO_OWNER = 'imcuttle';
 const REPO_NAME = 'proxybaby';
 const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
-/** 无鉴权、无限流的备用源：github.com 会302 到 /releases/tag/<version> */
+/** 无鉴权、无限流的备用源：github.com 会302到 /releases/tag/<version> */
 const RELEASES_HTML_LATEST = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 const RELEASES_HTML_BASE = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`;
+/** 无鉴权、无限流的静态资源：抓 CHANGELOG.md 用来在 API 限流时补 release body */
+const RAW_CHANGELOG_BASE = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}`;
 const REQUEST_TIMEOUT_MS = 5000;
 /** 手动检查以外的两次自动检查最小间隔 */
 const AUTO_CHECK_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
@@ -135,6 +137,14 @@ export function __setFallbackFetcherForTest(f: FallbackFetcher | null): void {
   fallbackFetcher = f ?? fetchLatestViaRedirect;
 }
 
+/** 允许测试注入 raw CHANGELOG fetcher */
+type ChangelogFetcher = (tag: string) => Promise<string>;
+let changelogFetcher: ChangelogFetcher = fetchChangelogFromRaw;
+
+export function __setChangelogFetcherForTest(f: ChangelogFetcher | null): void {
+  changelogFetcher = f ?? fetchChangelogFromRaw;
+}
+
 function defaultFetch(url: string): Promise<GithubReleaseResponse> {
   return new Promise((resolve, reject) => {
     const req = https.request(
@@ -219,6 +229,75 @@ function fetchLatestViaRedirect(): Promise<{ tag: string }> {
   });
 }
 
+/**
+ * 从 CHANGELOG.md 全文里抽出指定版本段的正文（不含 `## <ver>` 标题行）。
+ * 允许标题里带/不带 `v` 前缀，允许后缀日期（如 `## 0.8.1 - 2026-08-01`）。
+ * 找不到返回 ''。纯函数，导出以便单测。
+ */
+export function extractVersionSection(md: string, version: string): string {
+  if (!md || !version) return '';
+  const target = version.replace(/^v/i, '');
+  const src = md.replace(/\r\n/g, '\n');
+  const parts = src.split(/^## +/m);
+  for (let i = 1; i < parts.length; i++) {
+    const chunk = parts[i];
+    const nl = chunk.indexOf('\n');
+    const title = nl === -1 ? chunk : chunk.slice(0, nl);
+    const tv = title.trim().split(/\s+/)[0].replace(/^v/i, '');
+    if (tv === target) {
+      const body = nl === -1 ? '' : chunk.slice(nl + 1);
+      // 修`###🔧xx` 这种无空格 heading，GitHub Release body 里不会渲染成 h3。
+      // 排除 `#` 本身避免把 `#### sub` 误改成 `### # sub`。
+      return body.replace(/^(#{1,6})(?=[^\s#])/gm, '$1 ').trimEnd();
+    }
+  }
+  return '';
+}
+
+/**
+ * 无鉴权、无限流的 changelog 兜底：GET raw.githubusercontent.com 上对应 tag 的
+ * CHANGELOG.md，从中抽出该版本段。API 限流走302 fallback 时补release body 用。
+ * 网络/HTTP/解析失败一律返回 ''，不抛。
+ */
+function fetchChangelogFromRaw(tag: string): Promise<string> {
+  const version = (tag || '').replace(/^v/i, '');
+  if (!tag || !version) return Promise.resolve('');
+  const url = `${RAW_CHANGELOG_BASE}/${encodeURIComponent(tag)}/CHANGELOG.md`;
+  return new Promise((resolve) => {
+    const req = https.request(
+      url,
+      {
+        method: 'GET',
+        headers: { 'User-Agent': 'ProxyBaby-Updater', Accept: 'text/plain' },
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume();
+          resolve('');
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const body = Buffer.concat(chunks).toString('utf-8');
+            resolve(extractVersionSection(body, version));
+          } catch {
+            resolve('');
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve(''));
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve('');
+    });
+    req.end();
+  });
+}
+
 // ============ 主流程 ============
 
 function getCurrentVersion(): string {
@@ -259,11 +338,18 @@ export async function checkForUpdates(opts: CheckOptions = {}): Promise<UpdateCh
     apiError = err instanceof Error ? err : new Error(String(err));
   }
 
-  //API 失败（限流/网络）时用 302 兜底：只能拿到版本号，body 留空
+  //API 失败（限流/网络）时用 302兜底：只能拿到版本号，body 需要另抓CHANGELOG.md
   if (!release) {
     try {
       const { tag } = await fallbackFetcher();
-      release = { tag_name: tag, html_url: `${RELEASES_HTML_BASE}/tag/${tag}` };
+      // raw.githubusercontent.com 无鉴权、无匿名限流：抓仓库CHANGELOG.md 对应版本段
+      // 失败静默返回 ''，前端 fallback 到"（本次发布没有提供 changelog）"文案
+      const notes = await changelogFetcher(tag);
+      release = {
+        tag_name: tag,
+        html_url: `${RELEASES_HTML_BASE}/tag/${tag}`,
+        body: notes,
+      };
     } catch (fallbackErr) {
       // 两个源都失败：优先报告更能给用户帮助的错误
       const errMsg = friendlyErrorMessage(apiError, fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr)));

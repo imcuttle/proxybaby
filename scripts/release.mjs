@@ -89,7 +89,12 @@ pkg.version = next;
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
 // 4. prepend to CHANGELOG.md
-const notes = fs.readFileSync(notesPath, 'utf8').trim();
+const notesRaw = fs.readFileSync(notesPath, 'utf8').trim();
+// heading 后紧跟非空白字符（e.g. `###🔧 其他`）在 GFM 里不会渲染成 h3。
+// 兼容一下：行首 1-6 个 # 后若紧跟"非空白且非 #"，补一个空格。
+// 排除 `#`本身是为了别把 `#### sub` 误改成 `### # sub`（贪婪 + `#{1,6}` 会
+// 让正则从更短的段起手匹配）。
+const notes = notesRaw.replace(/^(#{1,6})(?=[^\s#])/gm, '$1 ');
 const clPath = path.resolve('CHANGELOG.md');
 const oldChangelog = fs.existsSync(clPath) ? fs.readFileSync(clPath, 'utf8') : '# proxybaby\n\n';
 // 用行首二级标题 `^## ` 切段（lookahead 保留分隔符不被吃掉）；对每段各自 trimEnd 再拼回。

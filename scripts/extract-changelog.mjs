@@ -32,6 +32,16 @@ if (!fs.existsSync(p)) {
 
 const raw = fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
+/**
+ * 修正行首无空格的 markdown heading（`###🔧 xx` → `### 🔧 xx`）。
+ * 早年CHANGELOG 里可能存在这种"###后紧跟 emoji/非空白"的写法，GFM 不会渲染成
+ * heading。抽入 GitHub Release body 前统一规范化一次。
+ * 排除 `#`本身是为了别把 `#### sub` 误改成 `### # sub`。
+ */
+function normalizeHeadings(md) {
+  return md.replace(/^(#{1,6})(?=[^\s#])/gm, '$1 ');
+}
+
 // Split into (header)(rest) pairs on `## ` at line start.
 // First chunk is the file preamble (e.g. "# proxybaby\n"), the rest are sections.
 const parts = raw.split(/^## +/m);
@@ -45,7 +55,7 @@ for (let i = 1; i < parts.length; i++) {
   const tv = title.trim().split(/\s+/)[0];
   if (tv === version) {
     const body = (nl === -1 ? '' : chunk.slice(nl + 1)).trimEnd();
-    console.log(body || fallback);
+    console.log(normalizeHeadings(body) || fallback);
     process.exit(0);
   }
 }

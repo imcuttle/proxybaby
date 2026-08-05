@@ -157,9 +157,6 @@ export function ListenPopover() {
                 {copied ? '已复制' : '复制'}
               </button>
             </div>
-            <div className="mt-1 text-[11px] font-mono text-pb-muted leading-relaxed">
-              export http_proxy=http://{copyHost}:{status.port}
-            </div>
           </div>
         </div>
       )}

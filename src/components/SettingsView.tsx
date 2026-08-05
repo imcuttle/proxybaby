@@ -5,16 +5,18 @@ import type {
   ScriptTestCase,
   ScriptTestResult,
   UpstreamProxyConfig,
+  ControlServerInfo,
 } from '../../shared/types';
 import { cn } from '../lib/cn';
 import { MonacoView } from './MonacoView';
 
 /**
  * 设置 & 高级工具页：
- *  - 脚本管理（Scripts）：作为 whistle 插件，`script://<id-or-name>` 引用；可勾选“全局”
+ *  - 脚本管理（Scripts）：作为 whistle 插件，`script://<id-or-name>` 引用；可勾选"全局"
  *  - 过滤配置入口提示（Allow/Block + SSL 解密清单已迁移至左下角 + 按钮）
  *  - 网络条件预设
  *  - 上游代理
+ *  - CLI 控制通道端口
  */
 export function SettingsView() {
   return (
@@ -24,6 +26,7 @@ export function SettingsView() {
         <FilterConfigEntry />
         <NetworkPanel />
         <UpstreamProxyPanel />
+        <ControlServerPanel />
       </div>
     </div>
   );
@@ -210,5 +213,87 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle?: React.Re
       <div className="text-sm font-semibold">{title}</div>
       {subtitle && <div className="text-xs text-pb-muted mt-0.5">{subtitle}</div>}
     </div>
+  );
+}
+
+// -------- Control Server (CLI 通道) --------
+function ControlServerPanel() {
+  const [info, setInfo] = useState<ControlServerInfo | null>(null);
+  const [draft, setDraft] = useState<string>('');
+  const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+
+  const refresh = async () => {
+    const i = await window.proxybaby.controlServerGet();
+    setInfo(i);
+    setDraft(String(i.port));
+  };
+  useEffect(() => { refresh(); }, []);
+
+  const save = async () => {
+    const p = Number(draft);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) {
+      setMsg({ tone: 'err', text: '端口需为 1-65535 的整数' });
+      return;
+    }
+    const r = await window.proxybaby.controlServerSetPort(p);
+    await refresh();
+    if (r.ok) {
+      setMsg({ tone: 'ok', text: r.note || `已切换到 ${r.port}，正在监听` });
+    } else {
+      setMsg({ tone: 'err', text: r.error || `端口 ${p} 无法监听（可能被占用）` });
+    }
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  if (!info) return null;
+  const envOverride = info.effectivePort !== info.port;
+  return (
+    <section data-testid="control-panel">
+      <SectionHeader
+        title="CLI 控制通道"
+        subtitle={
+          <>
+            官方 CLI（<code className="text-pb-accent">proxybaby</code>）与 AI Skill 通过本地 HTTP 与app 通信。
+            {envOverride && <span className="ml-1 text-pb-warning">当前进程被环境变量 <code>PROXYBABY_CTRL_PORT</code> 覆盖为 {info.effectivePort}</span>}
+          </>
+        }
+      />
+      <div className="border border-pb-border rounded p-3 space-y-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-24 text-pb-muted">端口</span>
+          <input
+            data-testid="control-port-input"
+            type="number"
+            className="pb-input w-24 px-2 py-0.5"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button
+            data-testid="control-port-save"
+            className="pb-btn px-2 py-0.5"
+            onClick={save}
+          >
+            <Save size={12} className="inline mr-1" /> 保存并重启通道
+          </button>
+          <span
+            data-testid="control-server-status"
+            className={cn('ml-2', info.listening ? 'text-pb-success' : 'text-pb-error')}
+          >
+            {info.listening ? `● 监听中 127.0.0.1:${info.effectivePort}` : '○ 未监听（端口占用或未启动）'}
+          </span>
+        </div>
+        {msg && (
+          <div
+            data-testid="control-panel-msg"
+            className={cn('text-xs', msg.tone === 'ok' ? 'text-pb-success' : 'text-pb-error')}
+          >
+            {msg.text}
+          </div>
+        )}
+        <div className="text-pb-muted">
+          默认 8898。修改后立即尝试换端口；若端口被占用会保持在原状态，不影响抓包。
+        </div>
+      </div>
+    </section>
   );
 }

@@ -420,6 +420,21 @@ export interface UpstreamProxyConfig {
   password?: string;
 }
 
+/** CLI 控制通道当前状态：port是已配置端口；effectivePort 是实际监听端口（受环境变量覆盖） */
+export interface ControlServerInfo {
+  port: number;
+  effectivePort: number;
+  listening: boolean;
+}
+
+export interface ControlServerSetResult {
+  ok: boolean;
+  error?: string;
+  port: number;
+  listening: boolean;
+  note?: string;
+}
+
 export interface ProxyBabyBridge {
   onEvent<K extends keyof IpcEvents>(event: K, handler: (payload: IpcEvents[K]) => void): () => void;
   getProxyStatus(): Promise<ProxyStatus>;
@@ -472,6 +487,9 @@ export interface ProxyBabyBridge {
   // Upstream proxy
   upstreamProxyGet(): Promise<UpstreamProxyConfig>;
   upstreamProxySet(cfg: UpstreamProxyConfig): Promise<UpstreamProxyConfig>;
+  // CLI 控制通道端口
+  controlServerGet(): Promise<ControlServerInfo>;
+  controlServerSetPort(port: number): Promise<ControlServerSetResult>;
   // Composer
   composerSend(req: { method: string; url: string; headers: Header[]; bodyText?: string }): Promise<{ ok: boolean; id?: string; error?: string }>;
   // 独立子窗口（Settings / Diff / FilterConfig / FilterEntryEditor / AI Sessions / RuleDebug）

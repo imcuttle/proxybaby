@@ -24,7 +24,15 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 
-const CTRL = { host: '127.0.0.1', port: 8898 };
+const DEFAULT_CTRL_PORT = 8898;
+const CTRL = {
+  host: '127.0.0.1',
+  // 允许通过 PROXYBABY_CTRL_PORT 覆盖，与 app 的设置保持一致；主要用于 e2e/多实例调试
+  port: (() => {
+    const env = Number(process.env.PROXYBABY_CTRL_PORT);
+    return Number.isInteger(env) && env >= 1 && env <= 65535 ? env : DEFAULT_CTRL_PORT;
+  })(),
+};
 const TOKEN_PATH = path.join(os.homedir(), '.proxybaby', 'cli-token');
 
 function readToken() {

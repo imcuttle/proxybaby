@@ -26,8 +26,10 @@ import { AllowBlockStore, setAllowBlockStore } from './engine/allow-block';
 import { RecordFilterStore, setRecordFilterStore } from './engine/record-filter';
 import { SslListStore, setSslListStore } from './engine/ssl-list';
 import { UpstreamProxyStore, setUpstreamProxyStore } from './engine/upstream-proxy';
+import { ControlConfigStore } from './engine/control-config';
 import { setGlobalThrottle, getGlobalThrottle } from './engine/network-conditions';
-import { startControlServer, stopControlServer } from './control/control-server';
+import { startControlServer, stopControlServer, restartControlServer, getControlServerStatus } from './control/control-server';
+import type { ControlDeps } from './control/control-server';
 import { installCliLink, installCliLinkWithSudo } from './system/cli-install';
 import { exportProxybaby, importProxybaby, exportHAR } from './store/session-io';
 import { repeatFlow } from './proxy/flow-repeat';
@@ -64,6 +66,8 @@ let allowBlockStore: AllowBlockStore | null = null;
 let recordFilterStore: RecordFilterStore | null = null;
 let sslListStore: SslListStore | null = null;
 let upstreamProxyStore: UpstreamProxyStore | null = null;
+let controlConfigStore: ControlConfigStore | null = null;
+let savedControlDeps: ControlDeps | null = null;
 const breakpointController = new BreakpointController();
 let proxyStatus: ProxyStatus = {
   running: false,
@@ -128,6 +132,7 @@ async function bootstrapProxy() {
   setSslListStore(sslListStore);
   upstreamProxyStore = new UpstreamProxyStore();
   setUpstreamProxyStore(upstreamProxyStore);
+  controlConfigStore = new ControlConfigStore();
   pluginManager = new PluginManager(ruleEngine);
 
   // 断点默认跟随 breakpoint 插件的启停
@@ -161,7 +166,7 @@ async function bootstrapProxy() {
   }
 
   // 启动 CLI 控制通道
-  startControlServer({
+  const controlDeps = {
     getProxyStatus: () => proxyStatus,
     getCertStatus: () => certStatus,
     setRecording: async (v: boolean) => {
@@ -186,7 +191,7 @@ async function bootstrapProxy() {
     },
     ruleEngine: () => ruleEngine,
     pluginManager: () => pluginManager,
-    exportSession: (format, filePath) => {
+    exportSession: (format: 'proxybaby' | 'har', filePath: string) => {
       const flows = store.all();
       if (format === 'har') exportHAR(flows, filePath);
       else exportProxybaby(flows, filePath);
@@ -194,7 +199,10 @@ async function bootstrapProxy() {
     },
     openWindow: () => showMainWindow(),
     quit: () => app.quit(),
-  });
+  };
+  // 保存到模块变量以便 IPC 换端口时复用
+  savedControlDeps = controlDeps;
+  startControlServer(controlDeps, controlConfigStore.effectivePort());
 
   broadcast('proxy:status', proxyStatus);
   broadcast('cert:status', certStatus);
@@ -981,6 +989,27 @@ function setupIpc() {
   // ---- Upstream Proxy ----
   ipcMain.handle('upstreamProxy:get', () => upstreamProxyStore?.get() ?? { kind: 'off' });
   ipcMain.handle('upstreamProxy:set', (_e, cfg: UpstreamProxyConfig) => upstreamProxyStore?.set(cfg) ?? { kind: 'off' });
+
+  // ---- Control Server (CLI 通道) ----
+  ipcMain.handle('controlServer:get', () => {
+    const stored = controlConfigStore?.get() ?? { port: 8898 };
+    const runtime = getControlServerStatus();
+    return { ...stored, effectivePort: runtime.port, listening: runtime.listening };
+  });
+  ipcMain.handle('controlServer:set-port', async (_e, port: number) => {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return { ok: false, error: '端口必须是 1-65535 的整数', ...getControlServerStatus() };
+    }
+    controlConfigStore?.set({ port });
+    // 环境变量优先（e2e 覆盖）；若设了env 就不重启（避免打乱测试隔离）
+    if (process.env.PROXYBABY_CTRL_PORT) {
+      return { ok: true, ...getControlServerStatus(), note: '当前进程用 env 端口，重启后配置生效' };
+    }
+    if (!savedControlDeps) return { ok: false, error: 'control deps未初始化', ...getControlServerStatus() };
+    const status = await restartControlServer(savedControlDeps, port);
+    return { ok: status.listening, ...status };
+  });
+
 
   // ---- Composer：直接从主进程发出请求（复用 flow-repeat 的能力） ----
   ipcMain.handle('composer:send', async (_e, req: { method: string; url: string; headers: { name: string; value: string }[]; bodyText?: string }) => {

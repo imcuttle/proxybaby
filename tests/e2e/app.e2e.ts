@@ -1322,6 +1322,29 @@ test('设置窗口：上游代理编辑并保存', async () => {
   await w.getByTestId('close-self').click();
 });
 
+test('设置窗口：CLI 控制通道端口面板展示 + 修改', async () => {
+  const w = await openSettingsWindow();
+  // 面板存在，端口输入框有值
+  await expect(w.getByTestId('control-panel')).toBeVisible();
+  const input = w.getByTestId('control-port-input');
+  const before = await input.inputValue();
+  expect(Number(before)).toBeGreaterThan(0);
+  // 状态栏显示监听中
+  await expect(w.getByTestId('control-server-status')).toContainText('监听中');
+  // 改一个新数字保存 → 提示区应该出现
+  await input.fill('19999');
+  await w.getByTestId('control-port-save').click();
+  await expect(w.getByTestId('control-panel-msg')).toBeVisible();
+  // 非法端口错误路径
+  await input.fill('0');
+  await w.getByTestId('control-port-save').click();
+  await expect(w.getByTestId('control-panel-msg')).toContainText('端口');
+  // 还原一个正常值
+  await input.fill(before);
+  await w.getByTestId('control-port-save').click();
+  await w.getByTestId('close-self').click();
+});
+
 // ============ 新特性：Composer ============
 
 test('Composer：填表并生成代码', async () => {

@@ -1,20 +1,24 @@
 /**
- * 本地控制 HTTP server（127.0.0.1:8898），供官方 CLI 与外部脚本控制 app。
+ * 本地控制 HTTP server（127.0.0.1:8898 默认），供官方 CLI 与外部脚本控制 app。
  *
  * 鉴权：启动时生成 token，写入 ~/.proxybaby/cli-token；CLI 读取并放入
  * `X-ProxyBaby-Token` 请求头。仅监听 loopback，最小暴露。
+ *
+ * 端口可通过 SettingsView 修改；EADDRINUSE 时不会崩主进程，而是保持
+ * server=null 让 status 反映"未启动"。
  */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import log from 'electron-log';
 import type { ProxyStatus, CertStatus } from '../../shared/types';
 import type { RuleEngine } from '../engine/rule-engine';
 import type { PluginManager } from '../engine/plugins';
 
 const CTRL_HOST = '127.0.0.1';
-const CTRL_PORT = 8898;
+export const DEFAULT_CTRL_PORT = 8898;
 
 export interface ControlDeps {
   getProxyStatus: () => ProxyStatus;
@@ -30,7 +34,13 @@ export interface ControlDeps {
 }
 
 let server: http.Server | null = null;
+let currentPort = 0;
 let token = '';
+
+/** 供 renderer 展示当前状态：port>0 表示监听成功；listening=false 意味着端口被占用了 */
+export function getControlServerStatus(): { port: number; listening: boolean } {
+  return { port: currentPort, listening: !!server };
+}
 
 function tokenPath(): string {
   const dir = path.join(os.homedir(), '.proxybaby');
@@ -46,10 +56,10 @@ function ensureToken(): string {
   return t;
 }
 
-export function startControlServer(deps: ControlDeps): void {
+export function startControlServer(deps: ControlDeps, port: number = DEFAULT_CTRL_PORT): void {
   if (server) return;
   token = ensureToken();
-  server = http.createServer(async (req, res) => {
+  const s = http.createServer(async (req, res) => {
     // 只接受 loopback
     const ra = req.socket.remoteAddress;
     if (ra !== '127.0.0.1' && ra !== '::1' && ra !== '::ffff:127.0.0.1') {
@@ -65,18 +75,44 @@ export function startControlServer(deps: ControlDeps): void {
       res.end(JSON.stringify({ error: err.message }));
     }
   });
-  server.listen(CTRL_PORT, CTRL_HOST);
+  s.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      log.warn(`[control-server] 端口 ${port} 已被占用（可能另一个 ProxyBaby 实例在跑），CLI 通道跳过启动`);
+    } else {
+      log.error('[control-server] listen 失败', err);
+    }
+    server = null;
+    currentPort = 0;
+  });
+  s.on('listening', () => {
+    server = s;
+    currentPort = port;
+    log.info(`[control-server] listening on ${CTRL_HOST}:${port}`);
+  });
+  s.listen(port, CTRL_HOST);
 }
 
 export function stopControlServer(): void {
   if (server) {
     try { server.close(); } catch {}
     server = null;
+    currentPort = 0;
   }
 }
 
+/** 换端口重启（用于设置面板保存后即时生效）。同步返回目标端口的绑定尝试是否成功。 */
+export async function restartControlServer(deps: ControlDeps, port: number): Promise<{ port: number; listening: boolean }> {
+  stopControlServer();
+  // 等一小会儿让端口释放，避免立刻 bind 到旧 socket
+  await new Promise((r) => setTimeout(r, 50));
+  startControlServer(deps, port);
+  // 等 listening/error 事件先跑一轮
+  await new Promise((r) => setTimeout(r, 150));
+  return getControlServerStatus();
+}
+
 async function route(req: http.IncomingMessage, res: http.ServerResponse, d: ControlDeps) {
-  const url = new URL(req.url || '/', `http://${CTRL_HOST}:${CTRL_PORT}`);
+  const url = new URL(req.url || '/', `http://${CTRL_HOST}:${currentPort || DEFAULT_CTRL_PORT}`);
   const method = req.method || 'GET';
   const path = url.pathname;
 

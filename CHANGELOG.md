@@ -1,5 +1,16 @@
 # proxybaby
 
+## 0.9.1
+
+### 🐛 修复
+- fix(updater): 检查更新时 GitHub REST API 匿名限流走302 fallback 后，追加一次 `raw.githubusercontent.com/imcuttle/proxybaby/<tag>/CHANGELOG.md` 二次拉取（无鉴权、无匿名限流），按 `## <version>` 抽出对应版本段填`releaseNotes`；不再出现"（本次发布没有提供changelog）" (`67ea7e5`)
+- fix(release): `scripts/release.mjs` 和 `scripts/extract-changelog.mjs` 写入 CHANGELOG.md / 输出前统一跑一次 heading 空格规范化 (`^(#{1,6})(?=[^\s#])` → `$1 `)，防止 `###🔧 其他` 这种无空格 heading 进GitHub Release body 后被当成纯文本 (`67ea7e5`)
+- fix(changelog): 修正 v0.8.1 段里`###🔧 其他` 缺失的空格（本地修正，GitHub 上已发布的 release body 保持不动）(`67ea7e5`)
+
+### 🧪 测试
+- 新增 `tests/unit/release-notes-normalize.test.ts`：覆盖 heading 空格规范化正则，含 `#### sub` 不误伤的负面用例 (`67ea7e5`)
+- `tests/unit/updater.test.ts` 补`extractVersionSection` 6 个 case + fallback 拉 raw CHANGELOG / 拉失败 两条路径 (`67ea7e5`)
+
 ## 0.9.0
 
 ### ✨ 新功能

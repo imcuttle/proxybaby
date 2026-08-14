@@ -280,7 +280,7 @@ function ToolsPanel({ tools }: { tools: ChatToolDefinition[] }) {
         </span>
       </button>
       {open && (
-        <div className="p-2 space-y-1">
+        <div className="p-2 space-y-1 max-h-[40vh] overflow-y-auto">
           {tools.map((t, i) => {
             const expanded = !!openIdx[i];
             return (
